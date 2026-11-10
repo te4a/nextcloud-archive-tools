@@ -4,7 +4,7 @@
 
 Archive Tools is a native Nextcloud application for browsing archives inside Files, extracting selected entries through the background queue, and connecting archives as shared read-only folders accessible through WebDAV.
 
-The `0.5.0-beta.1` development candidate is being prepared for public testing. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
+The `0.5.0-beta.1` source candidate is available for local testing. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
 
 ![Archive browsing inside Nextcloud Files](docs/images/native-files.png)
 
@@ -28,7 +28,7 @@ The release target is Nextcloud 34–35 and 64-bit PHP 8.5 with `intl`, on a Lin
 
 In Docker, these dependencies belong in the existing Nextcloud PHP environment. When web and cron run as separate services, both use the image containing the archive tools. The supplied Dockerfile example targets x86-64 and the official `nextcloud:34.0.5-apache` image.
 
-The last complete 0.4.1 baseline covered Nextcloud 34.0.5, PHP 8.5.12, PostgreSQL 17.11 and Redis 7.4.12. The 0.5 matrix includes both declared Nextcloud versions and additional database environments; each candidate needs its own completed validation report.
+The `0.5.0-beta.1` candidate passed its Nextcloud 34/35 compatibility matrix with PHP 8.5, PostgreSQL, SQLite, MariaDB and MySQL. Exact versions, assertion counts and remaining release gates are recorded in [validation results](docs/VALIDATION.md). Signing and a human pilot remain required before promotion to stable.
 
 ## Installation and configuration
 

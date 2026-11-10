@@ -101,8 +101,9 @@ this does not claim to preempt a blocking filesystem call inside PHP or a remote
 storage backend. Expiry follows the normal failure/rollback path, and a subsequent
 job receives a fresh budget. Rollback and lock/resource release are allowed to
 finish after expiry; the deadline stops further extraction instead of killing
-the PHP worker during cleanup. There is no process-global current-job deadline or
-new global/per-user admission limit.
+the PHP worker during cleanup. There is no process-global current-job deadline.
+Persistent connection/task admission is enforced separately by `AdmissionService`;
+decoder concurrency remains governed by the PHP/server infrastructure.
 
 Release gates must run these checks on both declared major versions and preserve
 native PROPFIND/GET/Range behavior, shared recipient aliases, parent moves,
