@@ -1,0 +1,8 @@
+{
+  "source": "https://apps.nextcloud.com/schema/apps/info.xsd",
+  "retrievedOn": "2026-11-10",
+  "sha256": "a8ec208d4be9e507dc28b24e1bb7d8fafa45cbf00ed4b460f1545b131369d362",
+  "licence": "AGPL-3.0-or-later",
+  "copyright": "2016 Nextcloud GmbH and Nextcloud contributors",
+  "purpose": "Pinned official schema for offline release-metadata validation. Review upstream changes before replacing this snapshot."
+}

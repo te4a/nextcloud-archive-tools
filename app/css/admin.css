@@ -1,0 +1,31 @@
+.archive-tools-admin .archive-tools-setting {
+    margin-block: 20px;
+}
+
+.archive-tools-admin .archive-tools-setting > label:not(:has(+ input[type="number"])) {
+    max-width: 700px;
+}
+
+.archive-tools-admin label[for="archive-tools-idle-timeout"] {
+    display: block;
+    margin-block-end: 8px;
+}
+
+.archive-tools-admin input[type="number"] {
+    width: 160px;
+}
+
+.archive-tools-admin .settings-hint {
+    max-width: 700px;
+    margin-block: 6px;
+    color: var(--color-text-maxcontrast);
+}
+
+.archive-tools-admin #archive-tools-settings-status {
+    display: inline-block;
+    margin-inline-start: 12px;
+}
+
+.archive-tools-admin .archive-tools-error {
+    color: var(--color-error);
+}

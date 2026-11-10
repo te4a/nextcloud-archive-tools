@@ -1,0 +1,8 @@
+{
+  "name": "archive-tools-browser-tests",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": { "test": "playwright test" },
+  "devDependencies": { "@playwright/test": "1.65.0" }
+}

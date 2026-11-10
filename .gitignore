@@ -1,0 +1,17 @@
+upstream/
+archive-toolkit/
+.env
+.env.*
+!.env.example
+.test-secrets.json
+.test-results/
+.ci-runs/
+.release-secrets/
+.release-staging/
+*.key
+node_modules/
+vendor/
+__pycache__/
+.pnpm-store/
+dist/
+.package-staging/
