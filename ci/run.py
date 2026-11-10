@@ -212,11 +212,13 @@ class Runner:
         self.summary['phpVersion'] = php
         self.check('PHP 8.5 runtime', php.startswith('8.5.'))
         db = self.occ('config:system:get', 'dbtype').strip()
-        self.check('expected database engine', db == ('mysql' if self.config['database'] in ('mysql', 'mariadb') else self.config['database']))
+        expected_db = {'mysql': 'mysql', 'mariadb': 'mysql', 'sqlite': 'sqlite3', 'pgsql': 'pgsql'}[self.config['database']]
+        self.summary['databaseType'] = db
+        self.check('expected database engine', db == expected_db)
         probe = r'''define('OC_CONSOLE', true); require '/var/www/html/lib/base.php';
 $config = \OCP\Server::get(\OCP\IConfig::class); $db = \OCP\Server::get(\OCP\IDBConnection::class);
 $type = $config->getSystemValue('dbtype');
-echo json_encode(['databaseVersion' => $db->executeQuery($type === 'sqlite' ? 'SELECT sqlite_version()' : 'SELECT VERSION()')->fetchOne(),
+echo json_encode(['databaseVersion' => $db->executeQuery($type === 'sqlite3' ? 'SELECT sqlite_version()' : 'SELECT VERSION()')->fetchOne(),
  'lockingProvider' => get_class(\OCP\Server::get(\OCP\Lock\ILockingProvider::class)), 'memcacheLocking' => $config->getSystemValue('memcache.locking', '')]);'''
         identity = json.loads(self.docker.run(['exec', '-T', '--user', 'www-data', 'nextcloud', 'php', '-r', probe]))
         self.summary.update(identity)
