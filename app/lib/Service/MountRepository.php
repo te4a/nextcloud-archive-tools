@@ -12,7 +12,7 @@ final class MountRepository {
     private array $activeLeases = [];
     private const LEASE_SECONDS = 300;
 
-    public function __construct(private IDBConnection $db, private ILockingProvider $locks) {}
+    public function __construct(private IDBConnection $db, private ILockingProvider $locks, private VirtualStorageCleanup $virtualStorageCleanup) {}
 
     public function findAll(): array {
         $qb = $this->db->getQueryBuilder();
@@ -64,6 +64,7 @@ final class MountRepository {
             if ($this->hasActiveLeases($id)) {
                 throw new \RuntimeException('The archive is currently in use. Try again when the operation has finished.');
             }
+            $this->virtualStorageCleanup->removeConnection($id);
             $qb = $this->db->getQueryBuilder();
             $qb->delete('archive_tools_mounts')->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))->executeStatement();
             $qb = $this->db->getQueryBuilder();

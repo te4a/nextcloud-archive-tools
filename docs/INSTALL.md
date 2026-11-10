@@ -53,6 +53,44 @@ The diagnostic report should identify the expected database, supported archive f
 
 A beta release registered in the App Store can be installed individually with `occ app:install --allow-unstable archive_tools`. That command requires a published compatible release. The current local candidate is not itself an App Store publication.
 
+## Resource limits and task history
+
+Persistent metadata has application limits in addition to each archive's entry/size limits. The defaults are:
+
+| Resource | Per creator / task owner | Whole application |
+| --- | ---: | ---: |
+| Connected archives | 16 | 128 |
+| Queued and running tasks | 4 | 32 |
+| Retained task records, including completed tasks | 200 | 2,000 |
+| Stored indexes, plans and encrypted credentials combined | 16 MiB | 128 MiB |
+
+The final check and creation run in one serialized database transaction. Reaching a limit rejects the request without creating a new connection or task. Ordinary users cannot change these ceilings. An administrator can override individual positive integer values in the Nextcloud system configuration:
+
+```php
+'archive_tools_limits' => [
+    'connections_per_owner' => 16,
+    'connections_global' => 128,
+    'active_jobs_per_owner' => 4,
+    'active_jobs_global' => 32,
+    'history_per_owner' => 200,
+    'history_global' => 2000,
+    'metadata_bytes_per_owner' => 16777216,
+    'metadata_bytes_global' => 134217728,
+],
+```
+
+Zero does not disable these limits. Passwords are limited to 4,095 bytes before archive processing or credential encryption. Connection limits count the creator even when other users can access a shared connection.
+
+Completed task records retain retry selections until the configured history retention removes them. Setting retention to zero preserves that history; it still consumes the metadata/history allowance. To free it intentionally without removing connections or user files, an administrator can preview one owner's terminal records:
+
+```sh
+php occ archive_tools:clear-history --owner USER_ID --output=json
+```
+
+Review the row count, stored bytes and number of output references. Add repeated `--id TASK_ID` options to select specific records; add `--execute` to forget the selected terminal metadata. Each invocation handles at most 200 records. Queued/running jobs, other owners, notifications, source archives and extracted files are preserved. Forgotten records lose their retry selections and output references in Archive Tools history.
+
+Disconnecting an archive removes its own virtual file-cache records. Cron also recovers older orphaned virtual caches in bounded passes, checking exact storage identities, current connections and active read leases. This recovery does not delete source archives or extracted files.
+
 ## Disable and remove
 
 `occ app:disable archive_tools` hides the app and its connections while retaining its configuration and records for re-enable. Source archives and extracted user files stay in Nextcloud.
@@ -60,3 +98,13 @@ A beta release registered in the App Store can be installed individually with `o
 Nextcloud 34 uses the same app uninstall repair hook during an ordinary disable. Archive Tools therefore keeps destructive metadata cleanup out of that hook. The candidate provides an explicit `archive_tools:purge` workflow; use its report and help output before requesting cleanup. Its destructive operation is allowed only after active work is quiescent and the lifecycle barrier is held.
 
 A completed purge removes application metadata and credentials and disables the app, while preserving user files. The standard app removal command or deployment then removes the code. Keep the corresponding backup if a downgrade or recovery is required; restore configuration, database and data together.
+
+Inspect the cleanup plan first, while the app is still enabled:
+
+```sh
+php occ archive_tools:purge --output=json
+```
+
+For an intentional permanent removal, stop users and background work from starting new Archive Tools operations, wait for current tasks and downloads to finish, then run `php occ archive_tools:purge --force --output=json`. An active operation makes the command refuse cleanup. After a successful purge, remove the code through the normal app removal procedure.
+
+Temporary decoder inputs and file-name lists follow a one-hour retention rule. Cleanup checks ownership and file identity and never follows a source archive link. Fresh or future-dated resources are retained. Each pass scans at most 5,000 directory entries and removes at most 200 resources; the command reports partial or failed cleanup. A successful metadata purge does not mean that every recent temporary resource has been removed.

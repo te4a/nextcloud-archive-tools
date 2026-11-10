@@ -24,9 +24,46 @@ The 0.4.1 baseline passed 617 application checks and 90 package checks on Nextcl
 
 ## Publishing identity
 
-The selected repository is `te4a/nextcloud-archive-tools`, app ID `archive_tools`, and maintainer `te4a`. Before publishing, verify ownership and availability of the app ID, repository URLs, issue tracker and private vulnerability reporting.
+The public repository is [te4a/nextcloud-archive-tools](https://github.com/te4a/nextcloud-archive-tools), app ID `archive_tools`, and maintainer `te4a`. Issues and private vulnerability reporting are enabled. App Store registration and a Nextcloud-issued signing certificate remain separate prerequisites.
 
 Keep signing keys outside published source and artifacts. Obtain an app certificate, sign the final application tree, then create and sign the release archive. Validate and test the exact artifact that will be uploaded. Rebuild and re-sign after any content change.
+
+## Building and signing the exact artifact
+
+The runtime package contains compiled assets, PHP, translations, licence texts, release notes and versioned source links. Development dependencies and test fixtures stay in the source repository. Vite generates the bundled dependency notices at `app/js/THIRD_PARTY_LICENSES.md` during the normal build.
+
+With all changes committed and the release gates complete:
+
+```sh
+python3 dev/package.py --prepare
+```
+
+Retain the returned stage path. Sign that exact directory in an environment with the matching Nextcloud installation and the maintainer's certificate:
+
+```sh
+php occ integrity:sign-app --path="$STAGE" --privateKey="$PRIVATE_KEY" --certificate="$CERTIFICATE"
+test -s "$STAGE/appinfo/signature.json"
+php occ integrity:check-app archive_tools --path="$STAGE" --output=json
+python3 dev/package.py --stage "$STAGE" --require-signature
+```
+
+The builder rejects changed stage files, unexpected contents, linked inputs, dirty source and incomplete signature coverage. It does not establish certificate trust itself; the native Nextcloud integrity check does that. Nextcloud skips an unsigned app during its integrity check, so signature presence must be checked explicitly.
+
+On the guarded local development stand, verify the final tarball with `python dev/verify-package.py --run --require-signature`. That tests installation, disable/enable and file preservation and requires Nextcloud to accept the exact packaged signature. The smoke test restores the workspace application origin; restore the stand's native cron after it completes.
+
+Publish the corresponding source commit at `vVERSION`. Upload the exact tested tarball and its checksum as release assets. The App Store also needs a separate signature over the archive bytes:
+
+```sh
+openssl dgst -sha512 -sign "$PRIVATE_KEY" "$ARCHIVE" | openssl base64 -A
+```
+
+Keys, credentials, raw CI logs and local test reports are excluded from release artifacts. Packaging is reproducible for identical input bytes and `SOURCE_DATE_EPOCH`; the default timestamp is zero. A source or metadata change requires a new stage, signature and package verification.
+
+## Backup verification boundary
+
+The isolated backup regression uses a stopped SQLite instance and the same application/core image before and after recovery. It snapshots configuration and data together, including the SQLite database, and restores their exact contents and file metadata. It verifies encrypted credentials against a deliberately changed core secret, restores connections/settings/source and output identities, and executes the recovered native queue task.
+
+This is evidence for an offline SQLite snapshot. It does not validate PostgreSQL backup restoration, point-in-time recovery or restoring onto different application/core versions. A deployment backup must also retain the matching application code; follow the [Nextcloud backup procedure](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/backup.html).
 
 ## Publishing references
 

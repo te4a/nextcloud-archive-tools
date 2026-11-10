@@ -322,5 +322,21 @@ OC.L10N.register("archive_tools", {
     "Only Archive Tools cache identities are supported.": "Поддерживаются только идентификаторы кэша Archive Tools.",
     "The archive cache identity changed during cleanup.": "Во время очистки изменился идентификатор кэша архива.",
     "The archive connection is unavailable during application cleanup.": "Подключение архива недоступно во время очистки приложения.",
-    "The archive temporary directory is unavailable.": "Временный каталог для обработки архивов недоступен."
+    "The archive temporary directory is unavailable.": "Временный каталог для обработки архивов недоступен.",
+    "An explicit valid task owner is required.": "Необходимо явно указать допустимого владельца заданий.",
+    "Archive Tools resource admission is unavailable for this database.": "Ограничение ресурсов Archive Tools недоступно для этой базы данных.",
+    "Archive Tools resource usage could not be verified.": "Не удалось проверить использование ресурсов Archive Tools.",
+    "Invalid archive connection identity.": "Недопустимый идентификатор подключения архива.",
+    "Select at most 200 positive task ids.": "Выберите не более 200 положительных идентификаторов заданий.",
+    "The Archive Tools resource limit configuration is invalid.": "Настройки ограничения ресурсов Archive Tools недопустимы.",
+    "The archive cache metadata could not be removed.": "Не удалось удалить метаданные кэша архива.",
+    "The archive password exceeds the supported byte length.": "Пароль архива превышает допустимую длину в байтах.",
+    "The server active archive task limit has been reached. Wait for existing tasks to finish.": "На сервере достигнут лимит активных заданий с архивами. Дождитесь завершения текущих заданий.",
+    "The server archive connection limit has been reached. Ask an administrator to disconnect unused archives.": "На сервере достигнут лимит подключений архивов. Попросите администратора отключить неиспользуемые архивы.",
+    "The server archive task history limit has been reached. Ask an administrator to clear completed task history.": "На сервере достигнут лимит истории заданий с архивами. Попросите администратора очистить историю завершённых заданий.",
+    "Your active archive task limit has been reached. Wait for a task to finish or cancel a queued task.": "Достигнут лимит ваших активных заданий с архивами. Дождитесь завершения задания или отмените задание в очереди.",
+    "Your archive connection limit has been reached. Disconnect an unused archive before connecting another.": "Достигнут лимит ваших подключений архивов. Отключите неиспользуемый архив перед подключением нового.",
+    "Your archive task history limit has been reached. Ask an administrator to clear completed task history.": "Достигнут лимит вашей истории заданий с архивами. Попросите администратора очистить историю завершённых заданий.",
+    "Your archive metadata limit has been reached. Disconnect unused archives or ask an administrator to clear completed task history.": "Достигнут лимит ваших служебных данных архивов. Отключите неиспользуемые архивы или попросите администратора очистить историю завершённых заданий.",
+    "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.": "На сервере достигнут лимит служебных данных архивов. Попросите администратора отключить неиспользуемые архивы или очистить историю завершённых заданий."
 }, "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);");

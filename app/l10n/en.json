@@ -319,7 +319,23 @@
         "Only Archive Tools cache identities are supported.": "Only Archive Tools cache identities are supported.",
         "The archive cache identity changed during cleanup.": "The archive cache identity changed during cleanup.",
         "The archive connection is unavailable during application cleanup.": "The archive connection is unavailable during application cleanup.",
-        "The archive temporary directory is unavailable.": "The archive temporary directory is unavailable."
+        "The archive temporary directory is unavailable.": "The archive temporary directory is unavailable.",
+        "An explicit valid task owner is required.": "An explicit valid task owner is required.",
+        "Archive Tools resource admission is unavailable for this database.": "Archive Tools resource admission is unavailable for this database.",
+        "Archive Tools resource usage could not be verified.": "Archive Tools resource usage could not be verified.",
+        "Invalid archive connection identity.": "Invalid archive connection identity.",
+        "Select at most 200 positive task ids.": "Select at most 200 positive task ids.",
+        "The Archive Tools resource limit configuration is invalid.": "The Archive Tools resource limit configuration is invalid.",
+        "The archive cache metadata could not be removed.": "The archive cache metadata could not be removed.",
+        "The archive password exceeds the supported byte length.": "The archive password exceeds the supported byte length.",
+        "The server active archive task limit has been reached. Wait for existing tasks to finish.": "The server active archive task limit has been reached. Wait for existing tasks to finish.",
+        "The server archive connection limit has been reached. Ask an administrator to disconnect unused archives.": "The server archive connection limit has been reached. Ask an administrator to disconnect unused archives.",
+        "The server archive task history limit has been reached. Ask an administrator to clear completed task history.": "The server archive task history limit has been reached. Ask an administrator to clear completed task history.",
+        "Your active archive task limit has been reached. Wait for a task to finish or cancel a queued task.": "Your active archive task limit has been reached. Wait for a task to finish or cancel a queued task.",
+        "Your archive connection limit has been reached. Disconnect an unused archive before connecting another.": "Your archive connection limit has been reached. Disconnect an unused archive before connecting another.",
+        "Your archive task history limit has been reached. Ask an administrator to clear completed task history.": "Your archive task history limit has been reached. Ask an administrator to clear completed task history.",
+        "Your archive metadata limit has been reached. Disconnect unused archives or ask an administrator to clear completed task history.": "Your archive metadata limit has been reached. Disconnect unused archives or ask an administrator to clear completed task history.",
+        "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.": "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history."
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"
 }

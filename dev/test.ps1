@@ -284,6 +284,9 @@ echo json_encode(['databaseType' => $config->getSystemValue('dbtype'), 'database
             @{ File = 'tar-reader.php'; Pattern = 'All (\d+) TAR reader tests passed\.'; Minimum = 19; Name = 'TAR reader' },
             @{ File = 'sevenzip-reader.php'; Pattern = 'SevenZip reader tests: (\d+) passed, 0 failed\.'; Minimum = 33; Name = '7-Zip reader' },
             @{ File = 'operation-budget.php'; Pattern = 'All (\d+) operation budget tests passed\.'; Minimum = 10; Name = 'Operation budget' },
+            @{ File = 'admission.php'; Pattern = 'All (\d+) admission tests passed\.'; Minimum = 29; Name = 'Resource admission' },
+            @{ File = 'admission-concurrency.php'; Pattern = 'All (\d+) admission concurrency tests passed\.'; Minimum = 15; Name = 'Resource admission concurrency' },
+            @{ File = 'admission-password.php'; Pattern = 'All (\d+) admission password tests passed\.'; Minimum = 11; Name = 'Password limits' },
             @{ File = 'format-readers.php'; Pattern = 'All (\d+) additional format reader tests passed\.'; Minimum = 4; Name = 'Additional format readers' },
             @{ File = 'job-retention.php'; Pattern = 'All (\d+) job retention tests passed\.'; Minimum = 23; Name = 'Job retention' },
             @{ File = 'extraction-plan.php'; Pattern = 'All (\d+) extraction plan tests passed\.'; Minimum = 12; Name = 'Extraction plan' },
@@ -343,6 +346,7 @@ echo json_encode(['databaseType' => $config->getSystemValue('dbtype'), 'database
         Invoke-ArchiveToolsPythonSuite -Name 'Queue-security' -File 'queue-security.py' -ReportFile 'latest-queue-security.json' -MinimumChecks 52
         Invoke-ArchiveToolsPythonSuite -Name 'Multi-format' -File 'multiformat.py' -ReportFile 'latest-multiformat.json' -MinimumChecks 100
         Invoke-ArchiveToolsPythonSuite -Name 'Concurrency' -File 'concurrency.py' -ReportFile 'latest-concurrency.json' -MinimumChecks 47
+        Invoke-ArchiveToolsPythonSuite -Name 'Admission API' -File 'admission.py' -ReportFile 'latest-admission.json' -MinimumChecks 58
         # Enable the image's normal five-minute cron only after deterministic suites finish.
         $null = Invoke-ArchiveToolsDocker -DockerArguments @('exec', '-T', '--user', 'www-data', 'nextcloud', 'php', 'occ', 'background:cron')
         $startCron = @'

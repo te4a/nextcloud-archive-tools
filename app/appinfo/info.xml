@@ -47,6 +47,7 @@
     <commands>
         <command>OCA\ArchiveTools\Command\Diagnose</command>
         <command>OCA\ArchiveTools\Command\Purge</command>
+        <command>OCA\ArchiveTools\Command\ClearHistory</command>
     </commands>
     <settings>
         <admin>OCA\ArchiveTools\Settings\Admin</admin>

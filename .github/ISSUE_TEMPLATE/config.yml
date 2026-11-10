@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/te4a/nextcloud-archive-tools/security/advisories/new
+    about: Share access-control, secret-disclosure or data-loss vulnerabilities privately.

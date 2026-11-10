@@ -11,6 +11,8 @@ use OCA\ArchiveTools\Service\MountInvalidator;
 use OCA\ArchiveTools\Service\MountInitializer;
 use OCA\ArchiveTools\Service\SettingsService;
 use OCA\ArchiveTools\Service\LifecycleService;
+use OCA\ArchiveTools\Service\AdmissionService;
+use OCA\ArchiveTools\Service\ResourceLimitException;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
@@ -39,6 +41,7 @@ final class MountController extends Controller {
         private MountInitializer $initializer,
         private IL10N $l,
         private LifecycleService $lifecycle,
+        private AdmissionService $admission,
     ) {
         parent::__construct('archive_tools', $request);
     }
@@ -116,6 +119,7 @@ final class MountController extends Controller {
         $lockedSource = null;
         $activity = null;
         try {
+            AdmissionService::validatePassword($password);
             $activity = $this->lifecycle->enter();
             $source = $this->nodeById($sourceId);
             if (!$source instanceof File) {
@@ -145,6 +149,10 @@ final class MountController extends Controller {
                     return new JSONResponse(['message' => $this->l->t('This connection already exists.')], 409);
                 }
             }
+            // Cheap preflight only; the final check and insert below share the
+            // durable writer barrier so simultaneous requests cannot overbook.
+            $owner = $this->userSession->getUser()->getUID();
+            $this->admission->assertConnection($owner);
             $localPath = $source->getStorage()->getLocalFile($source->getInternalPath());
             if (!is_string($localPath)) {
                 throw new \RuntimeException('Unable to read the archive.');
@@ -164,14 +172,17 @@ final class MountController extends Controller {
                     }
                 }
             }
-            return $this->lifecycle->write(function () use ($source, $parent, $name, $pinned, $sourceEtag, $index, $password): JSONResponse {
+            $indexJson = json_encode($index, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+            $encryptedPassword = $password === null ? null : $this->crypto->encrypt($password);
+            return $this->lifecycle->write(function () use ($source, $parent, $owner, $name, $pinned, $sourceEtag, $indexJson, $encryptedPassword): JSONResponse {
+            $this->admission->assertConnection($owner, $indexJson, $encryptedPassword);
             $id = $this->mounts->create([
                 'source_id' => $source->getId(), 'parent_id' => $parent->getId(),
-                'mount_name' => $name, 'created_by' => $this->userSession->getUser()->getUID(),
+                'mount_name' => $name, 'created_by' => $owner,
                 'pinned' => (int)$pinned, 'last_access' => time(),
                 'source_etag' => $sourceEtag,
-                'index_json' => json_encode($index, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                'password' => $password === null ? null : $this->crypto->encrypt($password),
+                'index_json' => $indexJson,
+                'password' => $encryptedPassword,
             ]);
             try {
                 $initializationLease = $this->mounts->beginReadLease($id);
@@ -198,7 +209,9 @@ final class MountController extends Controller {
             return new JSONResponse(['message' => $this->l->t($e->getMessage())], 409);
         } catch (LockedException) {
             return new JSONResponse(['message' => $this->l->t('The archive is currently in use. Try again when the operation has finished.')], 409);
-        } catch (\RuntimeException $e) {
+        } catch (ResourceLimitException $e) {
+            return new JSONResponse(['message' => $this->l->t($e->getMessage()), 'code' => 'resource_limit'], 429);
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
             return new JSONResponse(['message' => $this->l->t($e->getMessage())], 422);
         } finally {
             if ($lockedSource !== null) {

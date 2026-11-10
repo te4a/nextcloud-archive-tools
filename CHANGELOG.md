@@ -9,6 +9,12 @@ Development candidate; public release preparation is in progress.
 - Validate publishing metadata against a pinned official App Store schema.
 - Identify the maintainer as te4a and declare AGPL-3.0-or-later explicitly.
 - Prepare isolated Linux CI and native Files browser scenarios.
+- Share one monotonic time budget across every member of a queued extraction.
+- Preserve settings and connections on disable; provide an explicit guarded metadata purge and fresh reinstall workflow.
+- Recover expired temporary decoder inputs and file-name lists without deleting linked source archives or fresh resources.
+- Build a minimal reproducible runtime package with corresponding-source notices and bundled dependency licences.
+- Bound persistent connection/task metadata and queued work, including concurrent submissions; provide explicit terminal-history cleanup for administrators.
+- Remove virtual cache metadata on disconnect and recover old orphaned virtual storages through bounded cron passes.
 
 ## 0.4.1
 

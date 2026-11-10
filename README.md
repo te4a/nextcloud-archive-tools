@@ -36,6 +36,8 @@ Follow [installation instructions](docs/INSTALL.md). Release archives contain co
 
 Archive Tools uses the existing Nextcloud cron and background queue. A regular `cron.php` run is required for extraction, idle disconnection, history cleanup and recovery of interrupted work.
 
+Connections, active tasks and retained metadata have server-side limits. Administrators can configure them and explicitly clear completed task history; see [resource limits](docs/INSTALL.md#resource-limits-and-task-history).
+
 | Administrator setting | Default |
 | --- | --- |
 | Open supported archives on click | Enabled |

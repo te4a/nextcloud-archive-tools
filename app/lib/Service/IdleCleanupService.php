@@ -16,6 +16,7 @@ final class IdleCleanupService {
         private JobRepository $jobs,
         private LifecycleService $lifecycle,
         private TemporaryResourceCleanup $temporary,
+        private VirtualStorageCleanup $virtualStorageCleanup,
     ) {}
 
     /** @return array{idle:int,missing:int,busy:int,removed:array<int>,jobsDeleted:int,jobSecretsCleared:int,inputsCleaned:int,nameListsCleaned:int} */
@@ -87,6 +88,13 @@ final class IdleCleanupService {
                     'exceptionClass' => $error::class,
                 ]);
             }
+        }
+        try {
+            $result['virtualStorageCleanup'] = $this->virtualStorageCleanup->reapOrphans();
+        } catch (\Throwable $error) {
+            $this->logger->warning('Orphaned archive cache metadata could not be cleaned up.', [
+                'app' => 'archive_tools', 'exceptionClass' => $error::class,
+            ]);
         }
         return $result;
     }

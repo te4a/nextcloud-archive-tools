@@ -11,6 +11,8 @@ use OCA\ArchiveTools\Service\ArchiveChangedException;
 use OCA\ArchiveTools\Service\ExtractionService;
 use OCA\ArchiveTools\Service\MountRepository;
 use OCA\ArchiveTools\Service\LifecycleService;
+use OCA\ArchiveTools\Service\AdmissionService;
+use OCA\ArchiveTools\Service\ResourceLimitException;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
@@ -43,10 +45,11 @@ final class ArchiveController extends Controller {
     #[NoAdminRequired]
     public function inspect(int $sourceId, #[\SensitiveParameter] ?string $password = null): JSONResponse {
         $activity = null;
-        try { $activity = $this->lifecycle->enter(); return new JSONResponse($this->archives->inspect($this->owner(), $sourceId, $password)); }
+        try { AdmissionService::validatePassword($password); $activity = $this->lifecycle->enter(); return new JSONResponse($this->archives->inspect($this->owner(), $sourceId, $password)); }
         catch (ArchivePasswordRequiredException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage()), 'code' => 'password_required'], 422); }
         catch (NotFoundException) { return new JSONResponse(['message' => $this->l->t('Archive not found.')], 404); }
         catch (LockedException) { return $this->busy(); }
+        catch (ResourceLimitException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage()), 'code' => 'resource_limit'], 429); }
         catch (\InvalidArgumentException|\RuntimeException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage())], 422); }
         finally { $activity?->close(); }
     }
@@ -59,6 +62,7 @@ final class ArchiveController extends Controller {
         catch (AlreadyExistsException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage())], 409); }
         catch (ArchiveChangedException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage())], 409); }
         catch (LockedException) { return $this->busy(); }
+        catch (ResourceLimitException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage()), 'code' => 'resource_limit'], 429); }
         catch (\InvalidArgumentException|\RuntimeException $error) { return new JSONResponse(['message' => $this->l->t($error->getMessage())], 422); }
     }
 
@@ -69,6 +73,7 @@ final class ArchiveController extends Controller {
         $leases = [];
         $activity = null;
         try {
+            AdmissionService::validatePassword($password);
             $activity = $this->lifecycle->enter();
             $source = $this->archives->source($this->owner(), $sourceId);
             $source->lock(ILockingProvider::LOCK_SHARED);

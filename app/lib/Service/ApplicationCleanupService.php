@@ -3,14 +3,12 @@ declare(strict_types=1);
 
 namespace OCA\ArchiveTools\Service;
 
-use OC\Files\Cache\Storage;
 use OCA\ArchiveTools\AppInfo\Application;
 use OCA\ArchiveTools\BackgroundJob\CleanupJob;
 use OCA\ArchiveTools\BackgroundJob\ExtractJob;
 use OCP\App\IAppManager;
 use OCP\BackgroundJob\IJobList;
 use OCP\Config\IUserConfig;
-use OCP\Files\Config\IUserMountCache;
 use OCP\IAppConfig;
 use OCP\IDBConnection;
 use OCP\Lock\ILockingProvider;
@@ -27,7 +25,7 @@ final class ApplicationCleanupService {
         private IUserConfig $users,
         private IJobList $queue,
         private IManager $notifications,
-        private IUserMountCache $mountCache,
+        private VirtualStorageCleanup $virtualStorageCleanup,
         private ILockingProvider $locks,
         private TemporaryResourceCleanup $temporary,
         private LoggerInterface $logger,
@@ -50,7 +48,7 @@ final class ApplicationCleanupService {
             'protectedTasks' => $this->count('archive_tools_jobs', fn ($q) => $q->where($q->expr()->isNotNull('secret'))),
             'runningTasks' => $this->count('archive_tools_jobs', fn ($q) => $q->where($q->expr()->eq('state', $q->createNamedParameter('running')))),
             'activeStreams' => $this->count('archive_tools_leases', fn ($q) => $q->where($q->expr()->gt('expires_at', $q->createNamedParameter(time())))),
-            'virtualStorages' => count($this->virtualStorages()),
+            'virtualStorages' => $this->virtualStorageCleanup->countAll(),
             'temporaryResources' => $this->temporary->inspect(),
         ];
     }
@@ -91,11 +89,7 @@ final class ApplicationCleanupService {
                 $this->apps->disableApp(Application::APP_ID);
                 $this->queue->remove(ExtractJob::class);
                 $this->queue->remove(CleanupJob::class);
-                $removedStorages = 0;
-                foreach ($this->virtualStorages() as $row) {
-                    $this->removeVirtualStorage((string)$row['id'], (int)$row['numeric_id']);
-                    ++$removedStorages;
-                }
+                $removedStorages = $this->virtualStorageCleanup->removeAll();
                 foreach (['archive_tools_leases', 'archive_tools_jobs', 'archive_tools_mounts'] as $table) {
                     $this->db->getQueryBuilder()->delete($table)->executeStatement();
                 }
@@ -132,34 +126,4 @@ final class ApplicationCleanupService {
         });
     }
 
-    private function virtualStorages(): array {
-        $qb = $this->db->getQueryBuilder();
-        $rows = $qb->select('id', 'numeric_id')->from('storages')
-            ->where($qb->expr()->like('id', $qb->createNamedParameter($this->db->escapeLikeParameter('archive_tools:') . '%')))
-            ->executeQuery()->fetchAllAssociative();
-        return array_values(array_filter($rows, static fn (array $row): bool => preg_match('/^archive_tools:[1-9][0-9]*:[a-f0-9]{24}$/D', (string)$row['id']) === 1));
-    }
-
-    private function removeVirtualStorage(string $id, int $numericId): void {
-        // This metadata-only backend has no source path and no writable file
-        // operations. Native cache removal emits the normal cache cleanup events.
-        $storage = new MetadataOnlyStorage(['identity' => $id]);
-        $cache = $storage->getCache();
-        if ($cache->getNumericStorageId() !== $numericId) { throw new \RuntimeException('The archive cache identity changed during cleanup.'); }
-        $cache->remove('');
-        // A failed scanner may leave disconnected entries without a root.
-        do {
-            $qb = $this->db->getQueryBuilder();
-            $paths = $qb->select('path')->from('filecache')->where($qb->expr()->eq('storage', $qb->createNamedParameter($numericId)))
-                ->setMaxResults(200)->executeQuery()->fetchFirstColumn();
-            foreach ($paths as $path) { $cache->remove((string)$path); }
-        } while ($paths !== []);
-        $this->mountCache->remoteStorageMounts($numericId);
-        $qb = $this->db->getQueryBuilder();
-        $qb->delete('storages')->where($qb->expr()->eq('numeric_id', $qb->createNamedParameter($numericId)))
-            ->andWhere($qb->expr()->eq('id', $qb->createNamedParameter($id)))->executeStatement();
-        // Existing app storage adapters already rely on the core cache bridge;
-        // only clear its process-local mapping after removing this exact record.
-        Storage::getGlobalCache()->clearCache();
-    }
 }

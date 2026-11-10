@@ -43,12 +43,16 @@ UNIT_SUITES = [
     ('extraction-plan.php', r'All (\d+) extraction plan tests passed\.', 12),
     ('background-user-context.php', r'All (\d+) background user context tests passed\.', 27),
     ('operation-budget.php', r'All (\d+) operation budget tests passed\.', 10),
+    ('admission-password.php', r'All (\d+) admission password tests passed\.', 11),
+    ('admission.php', r'All (\d+) admission tests passed\.', 29),
+    ('admission-concurrency.php', r'All (\d+) admission concurrency tests passed\.', 15),
 ]
 HTTP_SUITES = [
     ('integration', 'integration.py', 82), ('lifecycle', 'lifecycle.py', 30),
     ('features', 'features.py', 38), ('webdav-readonly', 'webdav-readonly.py', 40),
     ('expected-etag', 'expected-etag.py', 70), ('queue-security', 'queue-security.py', 52),
     ('multiformat', 'multiformat.py', 128), ('concurrency', 'concurrency.py', 47),
+    ('admission', 'admission.py', 58),
 ]
 
 

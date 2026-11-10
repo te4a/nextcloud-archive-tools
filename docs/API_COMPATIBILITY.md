@@ -50,7 +50,9 @@ and review are separate release concerns.
 
 | Integration | Application location | Decision |
 | --- | --- | --- |
-| `OC\Files\Storage\Common` | `ArchiveStorage` | Retain the explicitly documented storage backend base and native metadata/scanner integration. |
+| `OC\Files\Storage\Common` | `ArchiveStorage`, `MetadataOnlyStorage` | Retain the documented storage backend base. The cleanup adapter has no user-file access or writable filesystem operations. |
+| `OC\Files\Cache\Storage::getGlobalCache()` | `VirtualStorageCleanup` | Clear the process-local storage identity map after removing an exact app-owned virtual storage. This concrete cache bridge remains version-sensitive. |
+| Core `storages` / `filecache` metadata schema | `VirtualStorageCleanup` | Enumerate only strict `archive_tools:<id>:<24hex>` identities. Use native cache removal and the public user mount-cache API; delete the exact matching storage record. Test disconnect, orphan cleanup and source/output preservation on supported versions. |
 | `OC\Files\Mount\MountPoint` | `ArchiveMountPoint` | Retain the concrete mount implementation behind public `IMountPoint`/`IMovableMount` contracts. Its constructor and lazy storage/cache identity behavior remain version-sensitive. |
 | `OC\Files\Cache\Wrapper\CacheWrapper` | `AccessCache` | Retain the native cache decorator. Its stable root/storage identity and per-operation access gate prevent stale shared listings from disclosing names. |
 | `OC\Files\Cache\FailedCache` | `AccessCache` | Retain the inaccessible-cache behavior together with the decorator; there is no equivalent public concrete cache wrapper to substitute by import. |

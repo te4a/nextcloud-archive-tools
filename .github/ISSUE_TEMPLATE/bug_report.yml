@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a reproducible Archive Tools problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report security vulnerabilities through the Security tab's private reporting form.
+        Use harmless sample files. Do not include passwords, session tokens, private archives or raw server configuration.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Archive Tools, Nextcloud, PHP, database and 7-Zip versions, if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and observed result
+      description: Describe the archive format, sharing permissions, steps, expected result and actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Relevant errors or diagnose output with private file names and identifiers removed.

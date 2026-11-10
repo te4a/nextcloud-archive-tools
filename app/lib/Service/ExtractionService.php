@@ -32,9 +32,11 @@ final class ExtractionService {
         private NotificationService $notifications,
         private LoggerInterface $logger,
         private LifecycleService $lifecycle,
+        private AdmissionService $admission,
     ) {}
 
     public function schedule(string $owner, int $sourceId, ?int $destinationId, string $folderName, array $members, #[\SensitiveParameter] ?string $password, ?string $expectedEtag = null): array {
+        AdmissionService::validatePassword($password);
         $activity = $this->lifecycle->enter();
         try { return $this->scheduleActive($owner, $sourceId, $destinationId, $folderName, $members, $password, $expectedEtag); }
         finally { $activity->close(); }
@@ -59,16 +61,19 @@ final class ExtractionService {
             $key = hash('sha256', json_encode([$owner, $sourceId, $sourceEtag, $destination->getId(), $folderName, array_keys($plan)], JSON_THROW_ON_ERROR));
             if ($existing = $this->jobs->findActive($key)) { return JobRepository::dto($existing); }
             if ($destination->nodeExists($folderName)) { throw new \OCP\Files\AlreadyExistsException('The extraction folder already exists. Choose a different name.'); }
-            return $this->lifecycle->write(function () use ($owner, $sourceId, $source, $sourceEtag, $destination, $folderName, $plan, $password, $files, $bytes, $key): array {
+            $planJson = json_encode($plan, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+            $encryptedSecret = $password === null ? null : $this->crypto->encrypt($password);
+            return $this->lifecycle->write(function () use ($owner, $sourceId, $source, $sourceEtag, $destination, $folderName, $planJson, $encryptedSecret, $files, $bytes, $key): array {
             // The durable writer barrier serializes simultaneous submissions.
             if ($existing = $this->jobs->findActive($key)) { return JobRepository::dto($existing); }
+            $this->admission->assertJob($owner, $planJson, $encryptedSecret);
             $now = time();
             try {
                 $id = $this->jobs->create([
                     'owner_id' => $owner, 'source_id' => $sourceId, 'source_name' => $source->getName(), 'source_etag' => $sourceEtag,
                     'destination_id' => $destination->getId(), 'folder_name' => $folderName,
-                    'plan_json' => json_encode($plan, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                    'secret' => $password === null ? null : $this->crypto->encrypt($password),
+                    'plan_json' => $planJson,
+                    'secret' => $encryptedSecret,
                     'active_key' => $key, 'state' => 'queued', 'cancel_requested' => 0,
                     'files_total' => $files, 'files_done' => 0, 'bytes_total' => $bytes, 'bytes_done' => 0,
                     'created_at' => $now, 'updated_at' => $now, 'target_id' => null, 'message' => null,
