@@ -27,6 +27,15 @@ export interface ArchiveInfo {
   entries: ArchiveEntry[]
 }
 
+export interface ZipArchiveEntry extends ArchiveEntry {
+  renderIndex: number
+}
+
+export interface ZipFolderInfo extends ArchiveInfo {
+  folder: ZipArchiveEntry | null
+  entries: ZipArchiveEntry[]
+}
+
 export interface Mount {
   id: number
   sourceId: number

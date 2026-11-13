@@ -43,6 +43,59 @@ if ($action === 'fixture' || $action === 'long-fixture') {
         'coreArgumentsContainOnlyJobId' => count($coreArguments) === 1 && $coreArguments[0] === ['jobId' => $id],
         'plaintextAbsentFromCoreArguments' => !str_contains(json_encode($coreArguments, JSON_THROW_ON_ERROR), $password),
     ];
+} elseif ($action === 'reconcile-queue') {
+    $id = (int)($argv[3] ?? 0);
+    $row = $jobs->find($id);
+    if ($row === null || $row['owner_id'] !== $owner || $row['state'] !== 'queued') {
+        throw new RuntimeException('Queued test job not found.');
+    }
+    $class = \OCA\ArchiveTools\BackgroundJob\ExtractJob::class;
+    $argument = ['jobId' => $id];
+    $list = \OCP\Server::get(\OCP\BackgroundJob\IJobList::class);
+    $nativeId = null;
+    foreach ($list->getJobsIterator($class, null, 0) as $job) {
+        if ($job->getArgument() === $argument) {
+            $nativeId = $job->getId();
+            break;
+        }
+    }
+    if ($nativeId === null) { throw new RuntimeException('Native test job not found.'); }
+
+    $db = \OCP\Server::get(\OCP\IDBConnection::class);
+    $extraction = \OCP\Server::get(\OCA\ArchiveTools\Service\ExtractionService::class);
+    $db->beginTransaction();
+    try {
+        // Model a selected fixture that has not yet started. Roll back all
+        // changes so the real queue can execute its original entry next.
+        $lastChecked = time() - 60;
+        $reservedAt = time();
+        $qb = $db->getQueryBuilder();
+        $updated = $qb->update('jobs')
+            ->set('last_checked', $qb->createNamedParameter($lastChecked))
+            ->set('reserved_at', $qb->createNamedParameter($reservedAt))
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($nativeId)))
+            ->executeStatement();
+        if ($updated !== 1) { throw new RuntimeException('Cannot model a native job reservation.'); }
+
+        $extraction->reconcile();
+        $qb = $db->getQueryBuilder();
+        $native = $qb->select('last_checked', 'reserved_at')->from('jobs')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($nativeId)))
+            ->executeQuery()->fetchAssociative();
+        $preserved = $native !== false
+            && (int)$native['last_checked'] === $lastChecked
+            && (int)$native['reserved_at'] === $reservedAt;
+
+        $list->remove($class, $argument);
+        $missing = !$list->has($class, $argument);
+        $extraction->reconcile();
+        $reply = [
+            'existingQueueMetadataPreserved' => $preserved,
+            'missingNativeJobRestored' => $missing && $list->has($class, $argument),
+        ];
+    } finally {
+        $db->rollBack();
+    }
 } elseif ($action === 'notification') {
     $id = (int)($argv[3] ?? 0);
     $row = $jobs->find($id);

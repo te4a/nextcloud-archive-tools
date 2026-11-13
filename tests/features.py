@@ -84,6 +84,31 @@ def run():
         report.check('viewer exposes normalized Unicode and nested paths', set(files) <= paths)
         report.check('viewer response excludes passwords and raw archive member names',
                      all('originalName' not in entry for entry in info['entries']) and 'password' not in info)
+        known = {'knownEtag': info['sourceEtag']}
+        status, cached = bob.api('POST', f'/archives/{source}/inspect', known)
+        report.check('unchanged archive returns only the current ETag',
+                     status == 200 and cached == {'unchanged': True, 'sourceEtag': info['sourceEtag']})
+        status, refreshed = bob.api('POST', f'/archives/{source}/inspect', {'knownEtag': 'stale'})
+        report.check('a stale ETag returns the full current index', status == 200 and refreshed == info)
+        report.check('conditional inspect still requires access',
+                     outsider.api('POST', f'/archives/{source}/inspect', known)[0] in (403, 404))
+        browse = f'/archives/{source}/browse-zip'
+        status, root = bob.api('POST', browse, {})
+        report.check('lazy ZIP root contains immediate children only',
+                     status == 200 and root['folder'] is None and
+                     {entry['path'] for entry in root['entries']} == {'one.txt', 'nested', 'кириллица'})
+        status, nested = bob.api('POST', browse, {'path': 'nested', 'expectedEtag': root['sourceEtag']})
+        report.check('lazy ZIP folder contains only its own direct children',
+                     status == 200 and {entry['path'] for entry in nested['entries']} == {'nested/two.txt', 'nested/three.bin'})
+        report.check('lazy ZIP keeps the same ID across a folder and its parent',
+                     nested['folder']['renderIndex'] == next(entry['renderIndex'] for entry in root['entries'] if entry['path'] == 'nested'))
+        report.check('lazy ZIP does not expose raw archive paths',
+                     all('originalName' not in entry and 'crc' not in entry for entry in root['entries'] + nested['entries']))
+        status, changed = bob.api('POST', browse, {'path': 'nested', 'expectedEtag': 'stale'})
+        report.check('lazy ZIP detects a stale source before listing', status == 409 and changed['code'] == 'archive_changed')
+        report.check('lazy ZIP inaccessible to an unrelated user', outsider.api('POST', browse, {})[0] == 404)
+        report.check('lazy ZIP reports absent directories', bob.api('POST', browse, {'path': 'missing'})[0] == 404)
+        report.check('lazy ZIP refuses a file as a directory', bob.api('POST', browse, {'path': 'one.txt'})[0] == 404)
         report.check('unrelated user cannot inspect the archive', outsider.api('POST', f'/archives/{source}/inspect', {})[0] in (403, 404))
         status, data = bob.request('POST', helpers['API'] + f'/archives/{source}/download',
                                    data=json.dumps({'member': 'nested/two.txt'}).encode(),

@@ -72,6 +72,14 @@ def run():
         report.check('wrong inspect password is rejected', bob.api('POST', f'/archives/{source}/inspect', {'password': 'incorrect'})[0] == 422)
         status, info = bob.api('POST', f'/archives/{source}/inspect', {'password': archive_secret})
         report.check('correct inspect password succeeds', status == 200 and info['encrypted'] is True)
+        status, listing = bob.api('POST', f'/archives/{source}/browse-zip', {})
+        report.check('protected ZIP folder listing excludes credentials', status == 200 and listing['encrypted'] is True
+                     and 'password' not in listing and {item['path'] for item in listing['entries']} == {'private', 'public.txt'})
+        status, body = bob.api('POST', f'/archives/{source}/browse-zip', {'path': 'private', 'password': 'incorrect'})
+        report.check('ZIP folder listing reports a wrong password', status == 422 and body['code'] == 'password_required')
+        status, listing = bob.api('POST', f'/archives/{source}/browse-zip', {'path': 'private', 'password': archive_secret})
+        report.check('correct ZIP password lists selected folder', status == 200 and listing['folder']['path'] == 'private'
+                     and 'private/secret.bin' in {item['path'] for item in listing['entries']})
 
         def download(password):
             return bob.request('POST', h['API'] + f'/archives/{source}/download',
@@ -91,6 +99,9 @@ def run():
         credentials = helper('credentials', job_id)
         report.check('queued credential is encrypted with the server crypto', credentials['encryptedSecretMatches'] and credentials['plaintextAbsentFromJob'])
         report.check('core queue arguments contain only the job id', credentials['coreArgumentsContainOnlyJobId'] and credentials['plaintextAbsentFromCoreArguments'])
+        reconciliation = helper('reconcile-queue', job_id)
+        report.check('queue reconciliation preserves the existing entry age and reservation', reconciliation['existingQueueMetadataPreserved'])
+        report.check('queue reconciliation restores a missing native entry', reconciliation['missingNativeJobRestored'])
         f['execute_job'](docker, job_id)
         status, result = bob.api('GET', f'/jobs/{job_id}')
         report.check('encrypted extraction completes successfully', status == 200 and result['status'] == 'succeeded' and result['filesDone'] == 2)

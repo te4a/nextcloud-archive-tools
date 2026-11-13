@@ -4,7 +4,7 @@
 
 Archive Tools is a native Nextcloud application for browsing archives inside Files, extracting selected entries through the background queue, and connecting archives as shared read-only folders accessible through WebDAV.
 
-The `0.5.0-beta.2` candidate is in preparation. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
+The current prerelease is `0.5.0-beta.3`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
 
 ![Archive browsing inside Nextcloud Files](docs/images/native-files.png)
 
@@ -12,6 +12,7 @@ The `0.5.0-beta.2` candidate is in preparation. The stable release gates are tra
 
 - ZIP, TAR, TAR.GZ/TGZ, TAR.BZ2/TBZ/TBZ2, TAR.XZ/TXZ, 7z and RAR.
 - Native Files navigation, selection, sorting, breadcrumbs and links to nested directories.
+- ZIP browsing loads one folder at a time, with an optional administrator setting for large archives.
 - Password-protected archives, individual downloads, full or selected extraction, progress and cancellation.
 - Persistent archive connections next to the source file. People with access to both the archive and its parent folder can read the connection with their own accounts.
 - Read-only WebDAV access to connected folders, with current source permissions and configurable idle cleanup.
@@ -51,7 +52,7 @@ Idle activity is shared among participants. Reading archive contents prolongs th
 
 ## Limits and permissions
 
-The index accepts at most 10,000 entries, 4 GiB of expanded contents, depth 32, and 8 MiB of entry names. Each normalized path component is limited to 250 UTF-8 bytes, matching Nextcloud's filename validation. Paths, links, special files and Unicode collisions are validated before use.
+The default index accepts at most 10,000 entries, 4 GiB of expanded contents, depth 32, and 8 MiB of entry names. Administrators can enable a larger ZIP index for browsing and selected extraction. Each normalized path component is limited to 250 UTF-8 bytes, matching Nextcloud's filename validation. Paths, links, special files and Unicode collisions are validated before use. [Browsing large ZIP archives](docs/INSTALL.md#browsing-large-zip-archives)
 
 Archive connections grant no additional access. Their contents require current read access to the source. Creating a connection requires permission to create content in its parent folder. Archive contents remain read-only.
 

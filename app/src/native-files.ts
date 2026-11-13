@@ -10,11 +10,11 @@ import { t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
 import { api, ApiError, errorMessage, isAborted } from './api.ts'
 import {
-  ARCHIVE_NODE_MARKER, archiveEtagIdentity, archiveRenderIds, archiveSourceId, archiveViewId, decodeArchiveDirectory,
-  encodeArchivePath, lockedArchiveRenderId, readFilesReturnRoute, sanitizeFilesReturnRoute,
+  ARCHIVE_NODE_MARKER, archiveDirectories, archiveEtagIdentity, archiveRenderIds, archiveSourceId, archiveViewId, decodeArchiveDirectory,
+  encodeArchivePath, lockedArchiveRenderId, readFilesReturnRoute, sanitizeFilesReturnRoute, zipRenderId,
 } from './native-archive-state.ts'
 import type { FilesReturnRoute } from './native-archive-state.ts'
-import type { ArchiveEntry, ArchiveInfo } from './types.ts'
+import type { ArchiveEntry, ArchiveInfo, ZipArchiveEntry, ZipFolderInfo } from './types.ts'
 import './native-files.css'
 
 const tr = (text: string, values?: Record<string, string | number>) => t('archive_tools', text, values)
@@ -26,9 +26,19 @@ interface FilesRouter {
   goToRoute(name: string | null, params: Record<string, string>, query?: FilesReturnRoute['query'], replace?: boolean): Promise<unknown>
 }
 interface ArchiveSnapshot { sourceId: string; etag: string; member: string; type: 'file' | 'dir'; generation: number }
+interface FullArchiveListing {
+  kind: 'full'
+  info: ArchiveInfo
+  password: string
+  ids: Map<string, number>
+  directories: ReturnType<typeof archiveDirectories>
+}
+type ArchiveListing = FullArchiveListing | { kind: 'zip'; info: ZipFolderInfo; password: string }
+type InspectResponse = ArchiveInfo | { unchanged: true; sourceEtag: string }
 interface ArchiveViewState {
-  sourceId: string; sourceName?: string; view: IView; password: string; info?: ArchiveInfo; folder?: IFolder
-  returnRoute: FilesReturnRoute | null; ids: Map<string, number>; generation: number
+  sourceId: string; sourceName?: string; view: IView; password: string; listing?: ArchiveListing; folder?: IFolder
+  sourceEtag?: string; validatedDirectory?: string
+  returnRoute: FilesReturnRoute | null; generation: number
   invalid: boolean; locked: boolean; prompting: boolean; closing: boolean; pendingAction: 'extract' | 'connect' | null
   passwordError?: string
   lifetime: AbortController
@@ -110,18 +120,17 @@ function storedReturn(sourceId: string): FilesReturnRoute | null {
   try { return readFilesReturnRoute(sessionStorage.getItem('archive-tools:return:' + sourceId)) } catch { return null }
 }
 
-function renderId(state: ArchiveViewState, member: string): number {
-  const id = state.ids.get(member)
-  if (id === undefined) throw new Error(tr('The operation failed. Try again.'))
-  return id
-}
-
 function archiveNode(state: ArchiveViewState, entry?: ArchiveEntry): INode {
-  const info = state.info!
+  const listing = state.listing!
+  const info = listing.info
   const root = generateUrl('/apps/archive_tools/virtual/' + state.sourceId + '/' + archiveEtagIdentity(info.sourceEtag))
   const member = entry?.path ?? ''
+  const id = listing.kind === 'zip'
+    ? zipRenderId(state.sourceId, entry ? (entry as ZipArchiveEntry).renderIndex : 0)
+    : listing.ids.get(member)
+  if (id === undefined) throw new Error(tr('The operation failed. Try again.'))
   const data = {
-    id: renderId(state, member), source: window.location.origin + root + (member ? '/' + encodeArchivePath(member) : ''),
+    id, source: window.location.origin + root + (member ? '/' + encodeArchivePath(member) : ''),
     root, owner: null, permissions: Permission.READ, displayname: member ? member.split('/').pop()! : info.sourceName,
     size: entry?.type === 'file' ? entry.size : 0,
     ...(entry?.mtime ? { mtime: new Date(entry.mtime * 1000) } : {}),
@@ -139,7 +148,7 @@ function selectedMembers(state: ArchiveViewState, nodes: INode[]): string[] {
   return nodes.map(node => {
     const snapshot = snapshots.get(node)
     if (!snapshot || snapshot.sourceId !== state.sourceId || snapshot.generation !== state.generation
-      || snapshot.etag !== state.info?.sourceEtag || !snapshot.member) throw new Error(tr('The archive changed. Open it again before continuing.'))
+      || snapshot.etag !== state.listing?.info.sourceEtag || !snapshot.member) throw new Error(tr('The archive changed. Open it again before continuing.'))
     return snapshot.member
   })
 }
@@ -152,9 +161,9 @@ function current(state: ArchiveViewState): boolean {
 function lockedContents(state: ArchiveViewState, path: string): { folder: IFolder; contents: INode[] } {
   const member = decodeArchiveDirectory(path)
   const root = generateUrl('/apps/archive_tools/virtual/' + state.sourceId + '/locked')
-  const name = state.info?.sourceName || state.sourceName || tr('Archive viewer')
+  const name = state.listing?.info.sourceName || state.sourceName || tr('Archive viewer')
   const folder = new ArchiveFolder({
-    id: lockedArchiveRenderId(state.sourceId, router().params.fileid),
+    id: lockedArchiveRenderId(state.sourceId, router().params.fileid, state.listing?.kind === 'zip'),
     source: window.location.origin + root + (member ? '/' + encodeArchivePath(member) : ''),
     root, owner: null, permissions: Permission.READ, displayname: member ? member.split('/').pop()! : name,
     attributes: { [ARCHIVE_NODE_MARKER]: true },
@@ -166,43 +175,91 @@ function lockedContents(state: ArchiveViewState, path: string): { folder: IFolde
   return { folder, contents: [] }
 }
 
+async function loadArchiveListing(state: ArchiveViewState, member: string, password: string, signal: AbortSignal): Promise<ArchiveListing> {
+  const previous = state.listing
+  const endpoint = '/archives/' + state.sourceId
+  if (previous?.kind !== 'full') {
+    try {
+      const info = await api<ZipFolderInfo>(endpoint + '/browse-zip', {
+        method: 'POST', body: JSON.stringify({ path: member, password: password || null, expectedEtag: state.sourceEtag }), signal,
+      })
+      return { kind: 'zip', info, password }
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 415) throw error
+    }
+  }
+  // Non-ZIP archives retain full inspection and the short unchanged response.
+  const cached = previous?.kind === 'full' && previous.password === password ? previous : undefined
+  const result = await api<InspectResponse>(endpoint + '/inspect', {
+    method: 'POST', body: JSON.stringify({ password: password || null, knownEtag: cached?.info.sourceEtag }), signal,
+  })
+  if ('unchanged' in result) {
+    if (!cached || result.sourceEtag !== cached.info.sourceEtag) throw new Error(tr('The operation failed. Try again.'))
+    return cached
+  }
+  return {
+    kind: 'full', info: result, password,
+    ids: archiveRenderIds(state.sourceId, result.entries.map(entry => entry.path)),
+    directories: archiveDirectories(result.entries),
+  }
+}
+
 async function getContents(state: ArchiveViewState, path: string, signal: AbortSignal): Promise<{ folder: IFolder; contents: INode[] }> {
   if (state.invalid) throw new Error(tr('The archive changed. Open it again before continuing.'))
-  let info: ArchiveInfo
+  const member = decodeArchiveDirectory(path)
+  const lifetime = state.lifetime
+  const password = state.password
+  const cached = state.listing?.password === password ? state.listing : undefined
+  const validated = state.validatedDirectory === member ? cached : undefined
+  state.validatedDirectory = undefined
+  const assertRequestCurrent = () => {
+    if (signal.aborted || lifetime.signal.aborted || state.lifetime !== lifetime || state.password !== password) {
+      throw new DOMException('Aborted', 'AbortError')
+    }
+  }
+  let listing: ArchiveListing
   try {
-    info = await api<ArchiveInfo>('/archives/' + state.sourceId + '/inspect', {
-      method: 'POST', body: JSON.stringify({ password: state.password || null }), signal,
-    })
+    listing = validated ?? await loadArchiveListing(state, member, password, signal)
   } catch (error) {
+    assertRequestCurrent()
+    if (error instanceof ApiError && error.status === 409 && error.code === 'archive_changed') {
+      state.password = ''; state.invalid = true; state.listing = undefined
+      updateHeader(state)
+    }
     if (error instanceof ApiError && error.status === 422 && current(state)
-      && (error.code === 'password_required' || state.password)) {
-      state.passwordError = state.password ? error.message : undefined
+      && (error.code === 'password_required' || (password && state.listing?.kind !== 'zip'))) {
+      state.passwordError = password ? error.message : undefined
+      const locked = lockedContents(state, path)
       state.password = ''
-      return lockedContents(state, path)
+      state.listing = undefined
+      return locked
     }
     throw error
   }
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
-  if (state.info && state.info.sourceEtag !== info.sourceEtag) {
+  assertRequestCurrent()
+  if (state.sourceEtag !== undefined && state.sourceEtag !== listing.info.sourceEtag) {
     state.password = ''; state.invalid = true
+    state.listing = undefined
+    updateHeader(state)
     throw new Error(tr('The archive changed. Open it again before continuing.'))
   }
-  state.info = info
-  state.ids = archiveRenderIds(state.sourceId, info.entries.map(entry => entry.path))
-  const member = decodeArchiveDirectory(path)
-  const entry = member ? info.entries.find(candidate => candidate.path === member && candidate.type === 'dir') : undefined
-  if (member && !entry) throw new Error(tr('The operation failed. Try again.'))
-  const folder = archiveNode(state, entry) as IFolder
+  const directory = listing.kind === 'zip'
+    ? { entry: listing.info.folder ?? undefined, children: listing.info.entries }
+    : listing.directories.get(member)
+  if (!directory || (directory.entry?.path ?? '') !== member || directory.entry?.type === 'file') {
+    throw new Error(tr('The operation failed. Try again.'))
+  }
+  state.listing = listing
+  state.sourceEtag = listing.info.sourceEtag
+  const folder = archiveNode(state, directory.entry) as IFolder
   state.folder = folder
-  state.locked = info.encrypted && !state.password
+  state.locked = listing.info.encrypted && !password
   updateHeader(state)
   if (state.locked) {
     queueMicrotask(() => { void promptPending(state) })
     return { folder, contents: [] }
   }
-  const prefix = member ? member + '/' : ''
-  const contents = info.entries.filter(candidate => candidate.path.startsWith(prefix)
-    && !candidate.path.slice(prefix.length).includes('/') && candidate.path !== member).map(candidate => archiveNode(state, candidate))
+  const contents = directory.children.map(entry => archiveNode(state, entry))
   queueMicrotask(() => { void promptPending(state) })
   return { folder, contents }
 }
@@ -212,7 +269,7 @@ function ensureView(sourceId: string): ArchiveViewState {
   const existing = states.get(id)
   if (existing) return existing
   const state = {
-    sourceId, password: '', returnRoute: storedReturn(sourceId), ids: new Map(), generation: 0,
+    sourceId, password: '', returnRoute: storedReturn(sourceId), generation: 0,
     invalid: false, locked: false, prompting: false, closing: false, pendingAction: null, lifetime: new AbortController(),
   } as ArchiveViewState
   state.view = {
@@ -233,10 +290,11 @@ export async function openNativeArchive(context: ActionContext, action: 'open' |
   state.lifetime.abort()
   state.lifetime = new AbortController()
   state.closing = false
-  state.password = ''; state.info = undefined; state.invalid = false; state.locked = false
+  state.password = ''; state.listing = undefined; state.invalid = false; state.locked = false
+  state.sourceEtag = undefined; state.validatedDirectory = undefined
   state.sourceName = context.nodes[0].basename
   state.passwordError = undefined
-  state.generation++; state.ids.clear()
+  state.generation++
   const currentRouter = router()
   state.returnRoute = sanitizeFilesReturnRoute({
     params: { ...currentRouter.params, view: context.view.id, fileid: sourceId },
@@ -255,8 +313,8 @@ async function returnToFiles(state: ArchiveViewState): Promise<void> {
   if (state.returnRoute) {
     const route = sanitizeFilesReturnRoute(state.returnRoute)
     await router().goToRoute('filelist', route.params, route.query)
-  } else if (state.info) {
-    window.location.assign(generateUrl('/f/' + state.info.parentId))
+  } else if (state.listing) {
+    window.location.assign(generateUrl('/f/' + state.listing.info.parentId))
   } else {
     await router().goToRoute('filelist', { view: 'files' }, { dir: '/' })
   }
@@ -267,18 +325,30 @@ async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' 
   const lifetime = state.lifetime
   const wasLocked = state.locked
   const host = dialogHost
+  const member = decodeArchiveDirectory(state.folder?.path ?? '/')
+  let validatedListing: ArchiveListing | undefined
   state.prompting = true
   try {
     const { showArchiveDialog } = await import('./archive-dialogs.ts')
     const staleBeforeMount = state.lifetime !== lifetime || !current(state) || dialogHost !== host || !host.isConnected
     if (staleBeforeMount) return
     const result = await showArchiveDialog(host, {
-      kind, sourceId: state.sourceId, info: state.info, password: state.password, members,
+      kind, sourceId: state.sourceId, info: state.listing?.info, password: state.password, members,
       error: kind === 'password' ? state.passwordError : undefined, signal: lifetime.signal,
+      validatePassword: async (password, signal) => {
+        const listing = await loadArchiveListing(state, member, password, signal)
+        if (state.sourceEtag !== undefined && listing.info.sourceEtag !== state.sourceEtag) {
+          throw new Error(tr('The archive changed. Open it again before continuing.'))
+        }
+        validatedListing = listing
+      },
     })
     if (state.lifetime !== lifetime || !current(state)) return
-    if (result?.kind === 'password') {
+    if (result?.kind === 'password' && validatedListing) {
       state.password = result.password
+      state.listing = validatedListing
+      state.sourceEtag = validatedListing.info.sourceEtag
+      state.validatedDirectory = member
       state.passwordError = undefined
       state.locked = false
       if (state.folder) {
@@ -306,7 +376,7 @@ async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' 
 async function promptPending(state: ArchiveViewState): Promise<void> {
   if (!current(state) || !dialogHost?.isConnected || headerView !== state.view.id || state.prompting) return
   if (state.locked) { await showDialog(state, 'password'); return }
-  if (state.pendingAction && state.info) {
+  if (state.pendingAction && state.listing) {
     const action = state.pendingAction
     state.pendingAction = null
     await showDialog(state, action)
@@ -316,12 +386,12 @@ async function promptPending(state: ArchiveViewState): Promise<void> {
 function updateHeader(state: ArchiveViewState): void {
   if (!headerElement || headerView !== state.view.id) return
   const title = headerElement.querySelector<HTMLElement>('[data-archive-name]')
-  if (title) title.textContent = state.info?.sourceName || state.sourceName || tr('Archive viewer')
+  if (title) title.textContent = state.listing?.info.sourceName || state.sourceName || tr('Archive viewer')
   for (const button of headerElement.querySelectorAll<HTMLButtonElement>('button[data-archive-action]')) {
-    button.disabled = state.prompting || state.invalid || !state.info
+    button.disabled = state.prompting || state.invalid || !state.listing
     if (button.dataset.archiveAction === 'password') {
-      button.hidden = !state.info?.encrypted && !state.locked
-      button.disabled = state.prompting || state.invalid || (!state.info?.encrypted && !state.locked)
+      button.hidden = !state.listing?.info.encrypted && !state.locked
+      button.disabled = state.prompting || state.invalid || (!state.listing?.info.encrypted && !state.locked)
       button.textContent = state.password ? tr('Change password') : tr('Enter password')
     }
   }
@@ -388,7 +458,7 @@ function downloadMember(state: ArchiveViewState, node: INode): void {
   const form = document.createElement('form')
   form.method = 'POST'; form.action = generateUrl('/apps/archive_tools/archives/' + state.sourceId + '/download')
   form.target = sink.name; form.hidden = true
-  for (const [name, value] of Object.entries({ member, expectedEtag: state.info!.sourceEtag, password: state.password, requesttoken: getRequestToken() || '' })) {
+  for (const [name, value] of Object.entries({ member, expectedEtag: state.listing!.info.sourceEtag, password: state.password, requesttoken: getRequestToken() || '' })) {
     const field = document.createElement('input')
     field.type = 'hidden'; field.name = name; field.value = value; form.append(field)
   }
@@ -445,6 +515,7 @@ export function initializeNativeArchives(): void {
     for (const state of states.values()) {
       if (nextViewId !== state.view.id) {
         state.closing = true
+        state.listing = undefined; state.folder = undefined; state.sourceEtag = undefined; state.validatedDirectory = undefined
         state.password = ''; state.passwordError = undefined; state.lifetime.abort(); state.pendingAction = null; state.prompting = false
       } else if (entering) {
         state.closing = false

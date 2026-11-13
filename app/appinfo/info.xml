@@ -7,7 +7,7 @@
     <summary lang="ru">Просмотр архивов и подключение к общим папкам</summary>
     <description>Browse ZIP, TAR, compressed TAR, 7z and RAR archives inside Files. Connect archives as read-only folders visible to people who can access both the source archive and its parent folder. Extract selected entries through the Nextcloud background queue, with progress, cancellation and configurable cleanup. Russian and English interfaces are included. Requires 64-bit PHP and intl. Includes 7-Zip for Linux x86-64 and ARM64. 7z, RAR, TAR.BZ2 and TAR.XZ also require prlimit and permission for PHP to run subprocesses.</description>
     <description lang="ru">Просматривайте ZIP, TAR, сжатые TAR, 7z и RAR внутри приложения «Файлы». Подключайте архивы как папки только для чтения: их видят пользователи с доступом к исходному архиву и родительской папке. Распаковка выбранных элементов использует очередь Nextcloud, показывает прогресс и поддерживает отмену. Предусмотрены общие настройки и автоматическая очистка. Интерфейс доступен на русском и английском. Нужны 64-битный PHP и intl. 7-Zip включён в пакет для Linux x86-64 и ARM64. Для работы с 7z, RAR, TAR.BZ2 и TAR.XZ также нужны prlimit и возможность запускать процессы из PHP.</description>
-    <version>0.5.0-beta.2</version>
+    <version>0.5.0-beta.3</version>
     <licence>AGPL-3.0-or-later</licence>
     <author homepage="https://github.com/te4a">te4a</author>
     <namespace>ArchiveTools</namespace>

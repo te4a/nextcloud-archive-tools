@@ -12,6 +12,7 @@ return [
         ['name' => 'mount#destroy', 'url' => '/mounts/{id}', 'verb' => 'DELETE'],
         ['name' => 'mount#update', 'url' => '/mounts/{id}', 'verb' => 'PATCH'],
         ['name' => 'archive#inspect', 'url' => '/archives/{sourceId}/inspect', 'verb' => 'POST'],
+        ['name' => 'archive#browseZip', 'url' => '/archives/{sourceId}/browse-zip', 'verb' => 'POST'],
         ['name' => 'archive#download', 'url' => '/archives/{sourceId}/download', 'verb' => 'POST'],
         ['name' => 'archive#extract', 'url' => '/archives/{sourceId}/extract', 'verb' => 'POST'],
         ['name' => 'job#index', 'url' => '/jobs', 'verb' => 'GET'],

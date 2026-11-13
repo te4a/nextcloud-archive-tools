@@ -52,7 +52,7 @@ final class ExtractionService {
             $sourceEtag = $this->archives->currentEtag($source, $expectedEtag);
             $leases = $this->mounts->beginSourceActivity($sourceId);
             $path = $this->archives->localPath($source);
-            $index = $this->reader->inspect($path, $password);
+            $index = $this->reader->inspect($path, $password, allowLargeZip: true);
             $plan = $this->archives->select($index, $members);
             $this->archives->probePassword($path, $plan, $password);
             $files = 0;
@@ -111,7 +111,11 @@ final class ExtractionService {
             catch (\Throwable) { /* Job state remains authoritative. */ }
         }
         foreach ($this->jobs->pending() as $row) {
-            $this->queue->add(ExtractJob::class, ['jobId' => (int)$row['id']]);
+            $argument = ['jobId' => (int)$row['id']];
+            // Adding an existing native job resets its queue age and reservation.
+            if (!$this->queue->has(ExtractJob::class, $argument)) {
+                $this->queue->add(ExtractJob::class, $argument);
+            }
         }
         });
     }

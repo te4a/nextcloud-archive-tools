@@ -8,7 +8,7 @@ import { api, errorMessage, isAborted } from './api.ts'
 import { compactSelection } from './selection.ts'
 import { archiveBaseName } from './archive-formats.ts'
 import type { ArchiveDialogOptions, ArchiveDialogResult } from './archive-dialogs.ts'
-import type { ArchiveInfo, Job, Mount, Settings } from './types.ts'
+import type { Job, Mount, Settings } from './types.ts'
 
 const props = defineProps<{ options: ArchiveDialogOptions }>()
 const emit = defineEmits<{ complete: [result: ArchiveDialogResult] }>()
@@ -61,12 +61,7 @@ async function submit(): Promise<void> {
     busy.value = true
     error.value = ''
     try {
-      const inspected = await api<ArchiveInfo>('/archives/' + encodeURIComponent(props.options.sourceId) + '/inspect', {
-        method: 'POST', signal: request.signal, body: JSON.stringify({ password: password.value }),
-      })
-      if (props.options.info && inspected.sourceEtag !== props.options.info.sourceEtag) {
-        throw new Error(tr('The archive changed. Open it again before continuing.'))
-      }
+      await props.options.validatePassword(password.value, request.signal)
       if (!disposed) emit('complete', { kind: 'password', password: password.value })
     } catch (caught) {
       if (!disposed && !isAborted(caught)) error.value = errorMessage(caught)

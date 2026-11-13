@@ -142,6 +142,7 @@ Your extraction jobs continue in the background, including after you leave this 
 {name} (extracted) => {name} (распаковано)
 Job not found. => Задание не найдено.
 Archive not found. => Архив не найден.
+The requested folder is not present in the ZIP archive. => Запрошенной папки нет в ZIP-архиве.
 Archive or destination folder not found. => Архив или папка назначения не найдены.
 Select an archive file. => Выберите файл архива.
 Select a file inside the archive. => Выберите файл внутри архива.
@@ -177,6 +178,8 @@ Background extraction is unavailable for storage that requires your login creden
 Unable to read the archive. => Не удалось прочитать архив.
 Unable to verify the archive password. => Не удалось проверить пароль архива.
 Too many selected archive entries. => Выбрано слишком много элементов архива.
+The ZIP extraction selection contains too many entries. Select fewer files or folders. => В выбранных файлах и папках ZIP слишком много элементов. Выберите меньше файлов или папок.
+The ZIP extraction selection exceeds the size limit. Select fewer files or folders. => Выбранные файлы и папки ZIP превышают ограничение размера. Выберите меньше файлов или папок.
 Invalid archive selection. => Недопустимый выбор элементов архива.
 A selected entry is not present in the archive. => Выбранного элемента нет в архиве.
 Invalid extraction folder name. => Недопустимое имя папки для распаковки.

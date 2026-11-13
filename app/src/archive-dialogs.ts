@@ -10,6 +10,7 @@ export interface ArchiveDialogOptions {
   members?: string[]
   error?: string
   signal?: AbortSignal
+  validatePassword: (password: string, signal: AbortSignal) => Promise<void>
 }
 
 export type ArchiveDialogResult =

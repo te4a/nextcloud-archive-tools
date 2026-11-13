@@ -25,12 +25,26 @@ test.beforeEach(async ({ page, context }) => {
 })
 
 test('native archive navigation, reload, literal names, download and return', async ({ page }) => {
+  const archiveEndpoint = '/archives/' + fixture.sourceId
+  let fullInspections = 0
+  page.on('request', request => {
+    if (request.url().endsWith(archiveEndpoint + '/inspect')) fullInspections++
+  })
+  const rootListing = page.waitForResponse(response => response.url().endsWith(archiveEndpoint + '/browse-zip')
+    && response.request().postDataJSON().path === '')
   await openRow(page, 'Browser.zip')
   await expect(page).toHaveURL(url => url.pathname.includes(nativeView))
   await expect(page.getByRole('button', { name: 'Back to Files', exact: true })).toBeVisible()
+  const root = await (await rootListing).json()
+  expect(root.entries.every(entry => !entry.path.includes('/'))).toBe(true)
+  const folderListing = page.waitForResponse(response => response.url().endsWith(archiveEndpoint + '/browse-zip')
+    && response.request().postDataJSON().path === 'Nested Юникод')
   await openRow(page, 'Nested Юникод')
   await expect.poll(() => currentDir(page)).toBe('/Nested Юникод')
   await expect(row(page, 'notes.txt')).toBeVisible()
+  const folder = await folderListing
+  expect(folder.request().postDataJSON().expectedEtag).toBe(root.sourceEtag)
+  expect((await folder.json()).entries.map(entry => entry.path)).toContain('Nested Юникод/notes.txt')
   await page.reload()
   await expect(row(page, 'notes.txt')).toBeVisible()
   await expect(page.locator('[data-cy-files-navigation-item="files"]')).toBeVisible()
@@ -57,6 +71,7 @@ test('native archive navigation, reload, literal names, download and return', as
   await expect(row(page, 'Browser.zip')).toBeVisible()
   expect(currentDir(page)).toBe('/CI Archives')
   expect(new URL(page.url()).searchParams.has('openfile')).toBe(false)
+  expect(fullInspections).toBe(0)
 })
 
 test('selection, native destination picker, queued extraction and pinned connection', async ({ page }) => {

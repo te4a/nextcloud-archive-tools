@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace OCA\ArchiveTools\Archive;
 
+use InvalidArgumentException;
 use Normalizer;
+use OutOfBoundsException;
 use RuntimeException;
 use SensitiveParameter;
 use ZipArchive;
@@ -15,18 +17,34 @@ use ZipArchive;
  */
 final class ZipReader {
 
+	public const MAX_ENTRIES = 10000;
+	public const MAX_EXPANDED_BYTES = 4294967296;
+	public const MAX_INDEX_NAME_BYTES = 8388608;
+
 	private const MAX_PATH_BYTES = 4000;
 	private const MAX_COMPONENT_BYTES = 250;
+	private readonly int $maxMemberBytes;
 
 	public function __construct(
-		private readonly int $maxEntries = 10000,
-		private readonly int $maxExpandedBytes = 4294967296,
+		private readonly int $maxEntries = self::MAX_ENTRIES,
+		private readonly int $maxExpandedBytes = self::MAX_EXPANDED_BYTES,
 		private readonly int $maxDepth = 32,
-		private readonly int $maxIndexNameBytes = 8388608,
+		private readonly int $maxIndexNameBytes = self::MAX_INDEX_NAME_BYTES,
+		?int $maxMemberBytes = null,
 	) {
-		if (PHP_INT_SIZE < 8 || $maxEntries < 1 || $maxExpandedBytes < 1 || $maxDepth < 1 || $maxIndexNameBytes < 1) {
+		$this->maxMemberBytes = $maxMemberBytes ?? $maxExpandedBytes;
+		if (PHP_INT_SIZE < 8 || $maxEntries < 1 || $maxExpandedBytes < 1 || $maxDepth < 1 || $maxIndexNameBytes < 1 || $this->maxMemberBytes < 1) {
 			throw new RuntimeException('ZIP reader limits require positive values and 64-bit PHP.');
 		}
+	}
+
+	public static function largeIndex(): self {
+		return new self(
+			maxEntries: 120000,
+			maxExpandedBytes: 17179869184,
+			maxIndexNameBytes: 33554432,
+			maxMemberBytes: self::MAX_EXPANDED_BYTES,
+		);
 	}
 
 	/**
@@ -35,7 +53,8 @@ final class ZipReader {
 	 *   entries: array<string, array{type: string, originalName: ?string,
 	 *     size: int, mtime: int, crc: ?int, encrypted: bool}>}
 	 */
-	public function inspect(string $localPath, #[SensitiveParameter] ?string $password = null): array {
+	public function inspect(string $localPath, #[SensitiveParameter] ?string $password = null, ?OperationBudget $budget = null): array {
+		$budget?->check();
 		$zip = $this->open($localPath, $password);
 		try {
 			if ($zip->numFiles > $this->maxEntries) {
@@ -50,11 +69,10 @@ final class ZipReader {
 			$encrypted = false;
 			$indexNameBytes = 0;
 			for ($index = 0; $index < $zip->numFiles; $index++) {
-				$stat = $zip->statIndex($index);
-				if ($stat === false) {
-					throw new RuntimeException('The ZIP archive contains an unreadable entry.');
+				if ($index % 256 === 0) {
+					$budget?->check();
 				}
-				$this->validateFileType($zip, $index);
+				$stat = $this->entryStat($zip, $index);
 				$name = $stat['name'];
 				[$path, $rawParts, $parts] = $this->normalizePath($name);
 				$this->consumeNameBytes(strlen($name), $indexNameBytes);
@@ -88,34 +106,15 @@ final class ZipReader {
 				if (isset($entries[$path])) {
 					throw new RuntimeException('The ZIP archive uses the same path for a file and a directory.');
 				}
-				$size = $stat['size'];
-				$packedSize = $stat['comp_size'];
-				if (!is_int($size) || $size < 0 || !is_int($packedSize) || $packedSize < 0) {
-					throw new RuntimeException('The ZIP archive reports an invalid entry size.');
-				}
-				if ($size > $this->maxExpandedBytes - $totalSize) {
-					throw new RuntimeException('The ZIP archive exceeds the expanded size limit.');
-				}
-				if ($packedSize > PHP_INT_MAX - $compressedSize) {
-					throw new RuntimeException('The ZIP archive reports an invalid compressed size.');
-				}
-				$totalSize += $size;
-				$compressedSize += $packedSize;
-				$isEncrypted = ($stat['encryption_method'] ?? ZipArchive::EM_NONE) !== ZipArchive::EM_NONE;
-				$encrypted = $encrypted || $isEncrypted;
+				$entry = $this->fileEntry($stat, $totalSize, $compressedSize);
+				$encrypted = $encrypted || $entry['encrypted'];
 				$this->consumeNameBytes(strlen($path), $indexNameBytes);
-				$entries[$path] = [
-					'type' => 'file',
-					'originalName' => $name,
-					'size' => $size,
-					'mtime' => (int)$stat['mtime'],
-					'crc' => (int)$stat['crc'],
-					'encrypted' => $isEncrypted,
-				];
+				$entries[$path] = $entry;
 				$this->checkIndexSize($entries);
 				$fileCount++;
 			}
 			ksort($entries, SORT_STRING);
+			$budget?->check();
 			return [
 				'format' => 'zip',
 				'fileCount' => $fileCount,
@@ -128,6 +127,177 @@ final class ZipReader {
 		} finally {
 			$zip->close();
 		}
+	}
+
+	/**
+	 * Validate physical members while retaining only the requested folder,
+	 * its ancestors and its immediate children for conflict detection.
+	 * Use inspect() for strict validation of every branch of the archive.
+	 *
+	 * @throws InvalidArgumentException If the directory path is not canonical.
+	 * @throws OutOfBoundsException If the directory does not exist.
+	 */
+	public function listDirectory(string $localPath, string $directory = '', #[SensitiveParameter] ?string $password = null, ?OperationBudget $budget = null): array {
+		$budget?->check();
+		$directoryParts = [];
+		if ($directory !== '') {
+			try {
+				[$normalized, , $directoryParts] = $this->normalizePath($directory);
+			} catch (RuntimeException $error) {
+				throw new InvalidArgumentException('Invalid archive selection.', previous: $error);
+			}
+			if ($normalized !== $directory) {
+				throw new InvalidArgumentException('Invalid archive selection.');
+			}
+		}
+		$depth = count($directoryParts);
+		$zip = $this->open($localPath, $password);
+		try {
+			if ($zip->numFiles > $this->maxEntries) {
+				throw new RuntimeException('The ZIP archive contains too many entries.');
+			}
+			$entries = [];
+			$totalSize = 0;
+			$compressedSize = 0;
+			$fileCount = 0;
+			$indexNameBytes = 0;
+			$passwordProbe = null;
+			for ($index = 0; $index < $zip->numFiles; $index++) {
+				if ($index % 256 === 0) {
+					$budget?->check();
+				}
+				$stat = $this->entryStat($zip, $index);
+				$name = $stat['name'];
+				[$path, $rawParts, $parts] = $this->normalizePath($name);
+				$this->consumeNameBytes(strlen($name), $indexNameBytes);
+				$isDirectory = str_ends_with($name, '/') || str_ends_with($name, '\\');
+				$file = null;
+				if (!$isDirectory) {
+					$file = $this->fileEntry($stat, $totalSize, $compressedSize);
+					$this->consumeNameBytes(strlen($path), $indexNameBytes);
+					$fileCount++;
+					if ($passwordProbe === null && $file['encrypted']) {
+						if ($zip->locateName($name) !== $index) {
+							throw new RuntimeException('The ZIP archive contains duplicate or colliding entry names.');
+						}
+						$passwordProbe = $file;
+					}
+				}
+
+				$prefix = '';
+				$last = count($parts) - 1;
+				for ($position = 0; $position <= min($depth, $last); $position++) {
+					$part = $parts[$position];
+					if ($position < $depth && $part !== $directoryParts[$position]) {
+						break;
+					}
+					$prefix = $prefix === '' ? $part : $prefix . '/' . $part;
+					$explicit = $position === $last;
+					$this->rememberDirectoryMember(
+						$entries, $prefix, $rawParts[$position], $index * ($this->maxDepth + 1) + $position + 1,
+						$explicit ? $name : null, $explicit ? $file : null, $indexNameBytes,
+					);
+				}
+				if ($isDirectory && $prefix !== $path) {
+					$this->consumeNameBytes(strlen($path), $indexNameBytes);
+				}
+			}
+
+			$folder = null;
+			if ($depth > 0) {
+				$folder = $entries[$directory] ?? null;
+				if (($folder['type'] ?? null) !== 'dir') {
+					throw new OutOfBoundsException('The requested folder is not present in the ZIP archive.');
+				}
+				unset($folder['rawPart'], $folder['explicit']);
+				$prefix = '';
+				foreach ($directoryParts as $part) {
+					$prefix = $prefix === '' ? $part : $prefix . '/' . $part;
+					unset($entries[$prefix]);
+				}
+			}
+			foreach ($entries as &$entry) {
+				unset($entry['rawPart'], $entry['explicit']);
+			}
+			unset($entry);
+			ksort($entries, SORT_STRING);
+			$budget?->check();
+			return [
+				'format' => 'zip',
+				'directory' => $directory,
+				'folder' => $folder,
+				'entries' => $entries,
+				'fileCount' => $fileCount,
+				'totalSize' => $totalSize,
+				'compressedSize' => $compressedSize,
+				'encrypted' => $passwordProbe !== null,
+				'passwordProbe' => $passwordProbe,
+			];
+		} finally {
+			$zip->close();
+		}
+	}
+
+	private function rememberDirectoryMember(array &$entries, string $path, string $rawPart, int $renderIndex, ?string $originalName, ?array $file, int &$indexNameBytes): void {
+		$type = $file !== null ? 'file' : 'dir';
+		if (isset($entries[$path])) {
+			if ($entries[$path]['rawPart'] !== $rawPart) {
+				throw new RuntimeException('The ZIP archive contains names that collide after Unicode normalization.');
+			}
+			if ($entries[$path]['explicit'] && $originalName !== null) {
+				throw new RuntimeException('The ZIP archive contains duplicate or colliding entry names.');
+			}
+			if ($entries[$path]['type'] !== $type) {
+				throw new RuntimeException('The ZIP archive uses the same path for a file and a directory.');
+			}
+			if ($originalName !== null) {
+				$entries[$path]['explicit'] = true;
+				$entries[$path]['originalName'] = $originalName;
+			}
+			return;
+		}
+		if ($file === null) {
+			$this->consumeNameBytes(strlen($path), $indexNameBytes);
+		}
+		$entries[$path] = $file ?? $this->directoryEntry();
+		$entries[$path]['rawPart'] = $rawPart;
+		$entries[$path]['explicit'] = $originalName !== null;
+		$entries[$path]['originalName'] = $originalName;
+		$entries[$path]['renderIndex'] = $renderIndex;
+		$this->checkIndexSize($entries);
+	}
+
+	private function entryStat(ZipArchive $zip, int $index): array {
+		$stat = $zip->statIndex($index);
+		if ($stat === false) {
+			throw new RuntimeException('The ZIP archive contains an unreadable entry.');
+		}
+		$this->validateFileType($zip, $index);
+		return $stat;
+	}
+
+	private function fileEntry(array $stat, int &$totalSize, int &$compressedSize): array {
+		$size = $stat['size'];
+		$packedSize = $stat['comp_size'];
+		if (!is_int($size) || $size < 0 || !is_int($packedSize) || $packedSize < 0) {
+			throw new RuntimeException('The ZIP archive reports an invalid entry size.');
+		}
+		if ($size > $this->maxExpandedBytes - $totalSize) {
+			throw new RuntimeException('The ZIP archive exceeds the expanded size limit.');
+		}
+		if ($packedSize > PHP_INT_MAX - $compressedSize) {
+			throw new RuntimeException('The ZIP archive reports an invalid compressed size.');
+		}
+		$totalSize += $size;
+		$compressedSize += $packedSize;
+		return [
+			'type' => 'file',
+			'originalName' => $stat['name'],
+			'size' => $size,
+			'mtime' => (int)$stat['mtime'],
+			'crc' => (int)$stat['crc'],
+			'encrypted' => ($stat['encryption_method'] ?? ZipArchive::EM_NONE) !== ZipArchive::EM_NONE,
+		];
 	}
 
 	/** @return resource A non-seekable read stream which owns its ZIP handle. */
@@ -144,7 +314,7 @@ final class ZipReader {
 			if ($stat === false || str_ends_with(str_replace('\\', '/', $originalName), '/')) {
 				throw new RuntimeException('The requested ZIP member is not a readable file.');
 			}
-			if (!is_int($stat['size']) || $stat['size'] < 0 || $stat['size'] > $this->maxExpandedBytes) {
+			if (!is_int($stat['size']) || $stat['size'] < 0 || $stat['size'] > $this->maxMemberBytes) {
 				throw new RuntimeException('The ZIP member exceeds the expanded size limit.');
 			}
 			if (($stat['encryption_method'] ?? ZipArchive::EM_NONE) !== ZipArchive::EM_NONE && ($password === null || $password === '')) {

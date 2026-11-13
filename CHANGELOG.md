@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-beta.3
+
+- Load ZIP contents one folder at a time in Nextcloud Files. Opening a ZIP or navigating to another folder returns only that folder's immediate children.
+- Add an administrator setting for browsing larger ZIP archives and extracting selections within the standard extraction limits.
+- Restore missing Nextcloud background job entries for queued extractions while preserving existing job reservations.
+
 ## 0.5.0-beta.2
 
 - Include 7-Zip 26.06 for Linux x86-64 and ARM64 so 7z, RAR, TAR.BZ2 and TAR.XZ work on compatible Nextcloud servers without a system 7-Zip installation.

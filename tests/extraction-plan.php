@@ -2,9 +2,11 @@
 declare(strict_types=1);
 
 use OCA\ArchiveTools\Service\ArchiveService;
+use OCA\ArchiveTools\Archive\ZipReader;
 
 $app = getenv('ARCHIVE_TOOLS_APP_PATH') ?: dirname(__DIR__) . '/app';
 require_once $app . '/lib/Service/ArchiveService.php';
+require_once $app . '/lib/Archive/ZipReader.php';
 $service = (new ReflectionClass(ArchiveService::class))->newInstanceWithoutConstructor();
 $index = ['entries' => [
     'a.txt' => ['type' => 'file'],
@@ -30,5 +32,17 @@ foreach ([['missing.txt'], ['../a.txt'], ['foo/../a.txt'], ['/a.txt'], ['foo\\a.
     try { $service->select($index, $invalid); }
     catch (InvalidArgumentException) { $rejected = true; }
     $check($rejected, 'invalid or missing selection is rejected before output creation');
+}
+$zip = ['format' => 'zip', 'entries' => [
+    'docs' => ['type' => 'dir', 'size' => 0, 'originalName' => null],
+    'docs/first.bin' => ['type' => 'file', 'size' => ZipReader::MAX_EXPANDED_BYTES, 'originalName' => 'docs/first.bin'],
+    'docs/second.bin' => ['type' => 'file', 'size' => 1, 'originalName' => 'docs/second.bin'],
+]];
+$check(count($service->select($zip, ['docs/first.bin'])) === 1, 'bounded ZIP member selection is accepted within a larger index');
+foreach ([[], ['docs']] as $oversized) {
+    $rejected = false;
+    try { $service->select($zip, $oversized); }
+    catch (InvalidArgumentException) { $rejected = true; }
+    $check($rejected, 'expanded ZIP selection is bounded after directory fanout');
 }
 echo 'All ', $checks, ' extraction plan tests passed.', PHP_EOL;

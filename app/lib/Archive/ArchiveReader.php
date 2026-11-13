@@ -14,18 +14,24 @@ final class ArchiveReader {
         private readonly ZipReader $zip = new ZipReader(),
         private readonly TarReader $tar = new TarReader(),
         private readonly SevenZipReader $sevenZip = new SevenZipReader(),
+        private readonly ?ZipReader $largeZip = null,
     ) {}
 
-    public function inspect(string $path, #[SensitiveParameter] ?string $password = null, ?OperationBudget $budget = null): array {
+    public function inspect(string $path, #[SensitiveParameter] ?string $password = null, ?OperationBudget $budget = null, bool $allowLargeZip = false): array {
         $budget?->check();
         $format = $this->detect($path);
         $index = match ($format) {
-            'zip' => $this->zip->inspect($path, $password),
+            'zip' => ($allowLargeZip ? $this->largeZip ?? $this->zip : $this->zip)->inspect($path, $password, $budget),
             'tar', 'tar.gz', 'tar.bz2', 'tar.xz' => $this->tar->inspect($path, $password, $budget),
             default => $this->sevenZip->inspect($path, $password, $budget),
         };
         $budget?->check();
         return $index;
+    }
+
+    public function browseZip(string $path, string $directory, #[SensitiveParameter] ?string $password, OperationBudget $budget): ?array {
+        if ($this->detect($path) !== 'zip') { return null; }
+        return ($this->largeZip ?? $this->zip)->listDirectory($path, $directory, $password, $budget);
     }
 
     /** @return resource */

@@ -4,6 +4,9 @@ declare(strict_types=1);
 namespace OCA\ArchiveTools\Service;
 
 use OCA\ArchiveTools\Archive\ArchiveReader;
+use OCA\ArchiveTools\Archive\ArchivePasswordRequiredException;
+use OCA\ArchiveTools\Archive\OperationBudget;
+use OCA\ArchiveTools\Archive\ZipReader;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -61,15 +64,19 @@ final class ArchiveService {
         return $etag;
     }
 
-    public function inspect(string $owner, int $sourceId, #[\SensitiveParameter] ?string $password = null): array {
+    public function inspect(string $owner, int $sourceId, #[\SensitiveParameter] ?string $password = null, ?string $knownEtag = null): array {
         $source = $this->source($owner, $sourceId);
         $source->lock(ILockingProvider::LOCK_SHARED);
         $leases = [];
         try {
             $sourceEtag = $this->currentEtag($source);
             $leases = $this->mounts->beginSourceActivity($sourceId);
-            $index = $this->reader->inspect($this->localPath($source), $password);
-            if ($password !== null && $password !== '') { $this->probePassword($this->localPath($source), $index['entries'], $password); }
+            if ($knownEtag !== null && hash_equals($sourceEtag, $knownEtag)) {
+                return ['unchanged' => true, 'sourceEtag' => $sourceEtag];
+            }
+            $localPath = $this->localPath($source);
+            $index = $this->reader->inspect($localPath, $password, allowLargeZip: true);
+            if ($password !== null && $password !== '') { $this->probePassword($localPath, $index['entries'], $password); }
             $entries = [];
             foreach ($index['entries'] as $path => $entry) {
                 $entries[] = ['path' => (string)$path, 'type' => $entry['type'], 'size' => $entry['size'], 'mtime' => $entry['mtime'], 'encrypted' => $entry['encrypted']];
@@ -81,6 +88,54 @@ final class ArchiveService {
             $this->mounts->endSourceActivity($leases);
             $source->unlock(ILockingProvider::LOCK_SHARED);
         }
+    }
+
+    public function browseZip(string $owner, int $sourceId, string $directory, #[\SensitiveParameter] ?string $password, ?string $expectedEtag): ?array {
+        $budget = new OperationBudget(15);
+        $source = $this->source($owner, $sourceId);
+        $source->lock(ILockingProvider::LOCK_SHARED);
+        $leases = [];
+        try {
+            $sourceEtag = $this->currentEtag($source, $expectedEtag);
+            $leases = $this->mounts->beginSourceActivity($sourceId);
+            $localPath = $this->localPath($source);
+            $listing = $this->reader->browseZip($localPath, $directory, $password, $budget);
+            if ($listing === null) { return null; }
+            if ($listing['passwordProbe'] !== null && $password !== null && $password !== '') {
+                try {
+                    $this->probePassword($localPath, [$listing['passwordProbe']], $password);
+                } catch (\RuntimeException) {
+                    throw new ArchivePasswordRequiredException(true);
+                }
+                $budget->check();
+            }
+            $entries = [];
+            foreach ($listing['entries'] as $path => $entry) {
+                $entries[] = $this->directoryItem((string)$path, $entry);
+            }
+            return [
+                'sourceId' => $sourceId,
+                'sourceName' => $source->getName(),
+                'parentId' => $source->getParent()->getId(),
+                'sourceEtag' => $sourceEtag,
+                'format' => 'zip',
+                'fileCount' => $listing['fileCount'],
+                'directoryCount' => count(array_filter($entries, static fn (array $entry): bool => $entry['type'] === 'dir')),
+                'totalSize' => $listing['totalSize'],
+                'compressedSize' => $listing['compressedSize'],
+                'encrypted' => $listing['encrypted'],
+                'folder' => $listing['folder'] === null ? null : $this->directoryItem($listing['directory'], $listing['folder']),
+                'entries' => $entries,
+            ];
+        } finally {
+            $this->mounts->endSourceActivity($leases);
+            $source->unlock(ILockingProvider::LOCK_SHARED);
+        }
+    }
+
+    private function directoryItem(string $path, array $entry): array {
+        return ['path' => $path, 'type' => $entry['type'], 'size' => $entry['size'],
+            'mtime' => $entry['mtime'], 'encrypted' => $entry['encrypted'], 'renderIndex' => $entry['renderIndex']];
     }
 
     public function probePassword(string $path, array $entries, #[\SensitiveParameter] ?string $password): void {
@@ -98,24 +153,49 @@ final class ArchiveService {
 
     /** Select complete entries, preserving directory structure and raw names. */
     public function select(array $index, array $members): array {
-        if (count($members) > 10000) { throw new \InvalidArgumentException('Too many selected archive entries.'); }
-        $selected = [];
-        if ($members === []) { return $index['entries']; }
+        if (count($members) > ZipReader::MAX_ENTRIES) { throw new \InvalidArgumentException('Too many selected archive entries.'); }
+        $entries = $index['entries'];
+        $selected = $members === [] ? $entries : [];
+        $directories = [];
         foreach ($members as $member) {
             if (!is_string($member) || $member === '' || str_contains($member, '\\') || str_contains($member, "\0")) {
                 throw new \InvalidArgumentException('Invalid archive selection.');
             }
             $member = rtrim($member, '/');
-            if (!isset($index['entries'][$member])) { throw new \InvalidArgumentException('A selected entry is not present in the archive.'); }
-            $selected[$member] = $index['entries'][$member];
-            if ($index['entries'][$member]['type'] === 'dir') {
-                foreach ($index['entries'] as $path => $entry) {
-                    if (str_starts_with((string)$path, $member . '/')) { $selected[$path] = $entry; }
+            if (!isset($entries[$member])) { throw new \InvalidArgumentException('A selected entry is not present in the archive.'); }
+            $selected[$member] = $entries[$member];
+            if ($entries[$member]['type'] === 'dir') { $directories[$member] = true; }
+        }
+        if ($directories !== []) {
+            foreach ($entries as $path => $entry) {
+                $parent = (string)$path;
+                while (($slash = strrpos($parent, '/')) !== false) {
+                    $parent = substr($parent, 0, $slash);
+                    if (isset($directories[$parent])) {
+                        $selected[$path] = $entry;
+                        break;
+                    }
                 }
             }
         }
-        ksort($selected, SORT_STRING);
+        if (($index['format'] ?? null) === 'zip') { $this->checkZipSelection($selected); }
+        if ($members !== []) { ksort($selected, SORT_STRING); }
         return $selected;
+    }
+
+    private function checkZipSelection(array $selected): void {
+        if (count($selected) > ZipReader::MAX_ENTRIES) {
+            throw new \InvalidArgumentException('The ZIP extraction selection contains too many entries. Select fewer files or folders.');
+        }
+        $expanded = 0;
+        $names = 0;
+        foreach ($selected as $path => $entry) {
+            $expanded += $entry['size'];
+            $names += strlen((string)$path) + strlen($entry['originalName'] ?? '');
+            if ($expanded > ZipReader::MAX_EXPANDED_BYTES || $names > ZipReader::MAX_INDEX_NAME_BYTES) {
+                throw new \InvalidArgumentException('The ZIP extraction selection exceeds the size limit. Select fewer files or folders.');
+            }
+        }
     }
 
     public function folderName(string $name, File $source): string {

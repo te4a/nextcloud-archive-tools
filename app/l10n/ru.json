@@ -339,7 +339,10 @@
         "Your archive connection limit has been reached. Disconnect an unused archive before connecting another.": "Достигнут лимит ваших подключений архивов. Отключите неиспользуемый архив перед подключением нового.",
         "Your archive task history limit has been reached. Ask an administrator to clear completed task history.": "Достигнут лимит вашей истории заданий с архивами. Попросите администратора очистить историю завершённых заданий.",
         "Your archive metadata limit has been reached. Disconnect unused archives or ask an administrator to clear completed task history.": "Достигнут лимит ваших служебных данных архивов. Отключите неиспользуемые архивы или попросите администратора очистить историю завершённых заданий.",
-        "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.": "На сервере достигнут лимит служебных данных архивов. Попросите администратора отключить неиспользуемые архивы или очистить историю завершённых заданий."
+        "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.": "На сервере достигнут лимит служебных данных архивов. Попросите администратора отключить неиспользуемые архивы или очистить историю завершённых заданий.",
+        "The ZIP extraction selection contains too many entries. Select fewer files or folders.": "В выбранных файлах и папках ZIP слишком много элементов. Выберите меньше файлов или папок.",
+        "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.": "Выбранные файлы и папки ZIP превышают ограничение размера. Выберите меньше файлов или папок.",
+        "The requested folder is not present in the ZIP archive.": "Запрошенной папки нет в ZIP-архиве."
     },
     "pluralForm": "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);"
 }
