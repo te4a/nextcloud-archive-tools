@@ -57,15 +57,7 @@ final class IdleCleanupService {
                     if ($mount === null || $this->mounts->hasActiveLeases($id, $now)) {
                         return null;
                     }
-                    $source = $this->mounts->sourceCacheInfo((int)$mount['source_id']);
-                    // A creator losing a share is not evidence of deletion:
-                    // other participants may still use the same connection.
-                    // Only global filecache removal or a home trash path is
-                    // conclusive. Temporary remote-storage/ACL failures are not.
-                    $missing = $source === null || (
-                        str_starts_with((string)$source['storage_string_id'], 'home::')
-                        && str_starts_with((string)$source['path'], 'files_trashbin/')
-                    );
+                    $missing = $this->mounts->isSourceMissing((int)$mount['source_id']);
                     $idle = $minutes > 0 && !(bool)$mount['pinned']
                         && (int)$mount['last_access'] <= $now - $minutes * 60;
                     if (!$missing && !$idle) {

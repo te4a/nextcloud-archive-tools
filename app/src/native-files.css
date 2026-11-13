@@ -3,3 +3,32 @@
 .archive-tools-files-toolbar strong { flex: 1 1 180px; overflow-wrap: anywhere; color: var(--color-main-text); }
 .archive-tools-files-toolbar button, .archive-tools-files-toolbar a { margin: 0; }
 .archive-tools-files-toolbar a { padding: 8px; text-decoration: underline; }
+
+.archive-tools-files-loading:empty { display: none; }
+
+.archive-tools-files-loading:not(:empty) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px var(--default-grid-baseline, 4px);
+  color: var(--color-main-text);
+}
+
+.archive-tools-files-loading::before {
+  content: '';
+  flex: 0 0 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-border-dark);
+  border-top-color: var(--color-primary-element);
+  border-radius: 50%;
+  animation: archive-tools-loading-spin 800ms linear infinite;
+}
+
+@keyframes archive-tools-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .archive-tools-files-loading::before { animation: none; }
+}

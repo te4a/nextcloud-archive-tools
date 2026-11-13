@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-beta.4
+
+- Show a loading indicator inside Nextcloud Files while an archive or one of its folders opens. Hide the previous folder's rows until the new listing is ready.
+- Use public Nextcloud mount interfaces for archive connections in shared folders and for read-only access over WebDAV.
+- Use public cache APIs to check whether an archive source still exists and to clean up leftover file metadata when a virtual archive storage is removed.
+
 ## 0.5.0-beta.3
 
 - Load ZIP contents one folder at a time in Nextcloud Files. Opening a ZIP or navigating to another folder returns only that folder's immediate children.

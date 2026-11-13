@@ -1,6 +1,6 @@
 # Stable release preparation
 
-Archive Tools targets a first public stable release after beta and release-candidate testing. The current beta is `0.5.0-beta.3`, followed by `0.5.0-rc.1` and `0.5.0`. A version suffix identifies a prerelease; it does not relax App Store publishing requirements.
+Archive Tools targets a first public stable release after beta and release-candidate testing. The current beta is `0.5.0-beta.4`, followed by `0.5.0-rc.1` and `0.5.0`. A version suffix identifies a prerelease and carries the same App Store publishing requirements.
 
 ## Release scope
 
@@ -12,7 +12,7 @@ The initial target is Nextcloud 34–35, PHP 8.5 on a 64-bit Linux server, and l
 
 | Gate | Acceptance |
 | --- | --- |
-| API compatibility | Documented storage integration retained; remaining concrete implementation dependencies are identified and tested on both declared Nextcloud versions. |
+| API compatibility | Verify the documented storage integration on both Nextcloud versions and resolve the remaining private dependencies under the App Store's public API rule. See [API compatibility](API_COMPATIBILITY.md). |
 | Access and data safety | Shared ACL changes, source changes, malformed archives, cancellation, process termination and rollback pass regressions. Original files and unrelated user changes are preserved. |
 | Resource limits | External-process limits and the whole extraction-operation budget are tested, including solid archives and termination cleanup. |
 | Application lifecycle | Fresh installation, upgrade, disable/enable, explicit metadata purge, reinstall and backup recovery have defined tested behaviour. |

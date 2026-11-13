@@ -7,7 +7,6 @@ namespace OCA\ArchiveTools\Mount;
 use OCA\ArchiveTools\Archive\ArchiveReader;
 use OCA\ArchiveTools\Service\MountRepository;
 use OCA\ArchiveTools\Service\LifecycleService;
-use OCA\ArchiveTools\Storage\ArchiveStorage;
 use OCP\Files\Config\IMountProvider;
 use OCP\Files\Config\IUserMountCache;
 use OCP\Files\IMimeTypeDetector;
@@ -72,9 +71,9 @@ final class MountProvider implements IMountProvider {
                     // Source/parent access is resolved lazily by the storage.
                     // Cached mount locations are candidates, never authorization.
                     $result[$target] = new ArchiveMountPoint(
-                        storage: ArchiveStorage::class,
-                        mountpoint: $target,
-                        arguments: [
+                        path: $target,
+                        mountId: (int)$row['id'],
+                        storageParameters: [
                             'mount' => $row,
                             'viewer' => $user->getUID(),
                             'repository' => $this->mounts,
@@ -83,15 +82,8 @@ final class MountProvider implements IMountProvider {
                             'crypto' => $this->crypto,
                             'mimeTypes' => $this->mimeTypes,
                         ],
-                        loader: $loader,
-                        mountOptions: [
-                            'readonly' => true,
-                            'enable_sharing' => false,
-                            'filesystem_check_changes' => 1,
-                            'previews' => true,
-                        ],
-                        mountId: (int)$row['id'],
-                        mountProvider: self::class,
+                        factory: $loader,
+                        logger: $this->logger,
                     );
                 }
             } catch (\Throwable $error) {

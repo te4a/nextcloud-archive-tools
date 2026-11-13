@@ -341,5 +341,7 @@ OC.L10N.register("archive_tools", {
     "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.": "На сервере достигнут лимит служебных данных архивов. Попросите администратора отключить неиспользуемые архивы или очистить историю завершённых заданий.",
     "The ZIP extraction selection contains too many entries. Select fewer files or folders.": "В выбранных файлах и папках ZIP слишком много элементов. Выберите меньше файлов или папок.",
     "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.": "Выбранные файлы и папки ZIP превышают ограничение размера. Выберите меньше файлов или папок.",
-    "The requested folder is not present in the ZIP archive.": "Запрошенной папки нет в ZIP-архиве."
+    "The requested folder is not present in the ZIP archive.": "Запрошенной папки нет в ZIP-архиве.",
+    "Opening archive…": "Открываем архив…",
+    "Loading archive folder…": "Загружаем папку архива…"
 }, "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);");

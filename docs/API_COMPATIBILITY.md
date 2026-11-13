@@ -1,6 +1,6 @@
 # Nextcloud API compatibility
 
-This document records the backend integration boundaries for the Nextcloud 34–35
+This document records the integration boundaries for the Nextcloud 34–35
 release target. It distinguishes documented filesystem extension mechanisms from
 remaining implementation dependencies. A PHP namespace inventory alone is not
 an App Store approval decision.
@@ -33,7 +33,7 @@ needed to use the documented backend extension mechanism.
 
 Nextcloud's former app code checker was made a no-op by
 [upstream commit e618ea8](https://github.com/nextcloud/server/commit/e618ea83b5a54f566e1cc1fbfdfcce07be752108)
-in 2021. The exact `v34.0.5` and `v35.0.0` source trees do not contain the old
+in 2021. The `v34.0.5` and `v35.0.0` source trees do not contain the old
 `App/CodeChecker` implementation or the `app:check-code` command. Thus there is no
 current core checker allowlist against which these dependencies can be certified.
 Legacy mentions of the `appcodechecker` setting are not evidence of an active
@@ -52,10 +52,12 @@ and review are separate release concerns.
 | --- | --- | --- |
 | `OC\Files\Storage\Common` | `ArchiveStorage`, `MetadataOnlyStorage` | Retain the documented storage backend base. The cleanup adapter has no user-file access or writable filesystem operations. |
 | `OC\Files\Cache\Storage::getGlobalCache()` | `VirtualStorageCleanup` | Clear the process-local storage identity map after removing an exact app-owned virtual storage. This concrete cache bridge remains version-sensitive. |
-| Core `storages` / `filecache` metadata schema | `VirtualStorageCleanup` | Enumerate only strict `archive_tools:<id>:<24hex>` identities. Use native cache removal and the public user mount-cache API; delete the exact matching storage record. Test disconnect, orphan cleanup and source/output preservation on supported versions. |
-| `OC\Files\Mount\MountPoint` | `ArchiveMountPoint` | Retain the concrete mount implementation behind public `IMountPoint`/`IMovableMount` contracts. Its constructor and lazy storage/cache identity behavior remain version-sensitive. |
-| `OC\Files\Cache\Wrapper\CacheWrapper` | `AccessCache` | Retain the native cache decorator. Its stable root/storage identity and per-operation access gate prevent stale shared listings from disclosing names. |
-| `OC\Files\Cache\FailedCache` | `AccessCache` | Retain the inaccessible-cache behavior together with the decorator; there is no equivalent public concrete cache wrapper to substitute by import. |
+| Core `storages` metadata schema | `VirtualStorageCleanup` | Enumerate only strict `archive_tools:<id>:<24hex>` identities. Use native cache removal and the public user mount-cache API. Delete the exact matching storage record. |
+| `ICache::searchQuery()`, `ICache::remove()` | `VirtualStorageCleanup` | Find leftover cache entries in bounded batches using the storage's own search filter. Remove them through the native cache API, including related metadata. |
+| `IFileAccess::getByFileId()` | `MountRepository` | Use the public exact file-ID lookup to detect a deleted source. Look up the string identity in the core storage registry only for a cache path that could be in home trash. |
+| `IMountPoint`, `IMovableMount`, `IStorageFactory` | `ArchiveMountPoint` | The archive mount implements the public interfaces and asks the core factory to apply its storage wrappers. Archive Tools supplies the lazy storage identity and maps each recipient's share path to the shared archive contents. |
+| `OC\Files\Cache\Wrapper\CacheWrapper` | `AccessCache` | Retain the native cache decorator for the stable root/storage identity, access checks, and compatibility with the native scanner. The scanner and storage base depend on methods beyond `ICache`. |
+| `OC\Files\Cache\FailedCache` | `AccessCache` | Retain the native inaccessible-cache behavior. Its denied root is a server-provided `ICacheEntry`, which Nextcloud marks `Consumable`. |
 | `OC\Files\Storage\Wrapper\Wrapper` | `ExtractionLockStorage` | Retain the native storage decorator so writes can use already reserved destination paths while preserving locks against other requests. |
 | `OC\Files\View` | `ExtractionService` | Retain the narrow interrupted-stream unlock compensation pending a verified public equivalent or an upstream fix; removing it can break rollback and leak file/ancestor locks. |
 | `OC_Util::setupFS/tearDownFS` | `ExtractJob` | Replaced with injected public `OCP\Files\ISetupManager`, available and marked consumable since 34.0.0. |
@@ -77,6 +79,36 @@ event timing and metadata behavior. That is not a drop-in compatibility change.
 contexts; it is not a replacement for transactional `OCP\Lock\ILockingProvider`
 locks used here.
 
+## Questions for Nextcloud maintainers
+
+- Can apps enumerate and retire their own unmounted storage identities through a
+  supported API? Retirement needs to remove the metadata and mount projections
+  and invalidate the process-local identity mapping. For source deletion, a
+  public way to resolve a cached file's storage type or trash status would remove
+  the remaining home-trash lookup against the same registry.
+- Is there a supported cache decorator for a native storage whose access can
+  change during a request? It needs to preserve the storage/root identity,
+  hide cached member entries after access is lost, and work with the native
+  scanner and availability checks.
+- How should an app run a native `Folder::newFile(name, stream)` under an
+  exclusive reservation on the destination while preserving other requests'
+  locks? For stream or destination errors, the core operation needs to release
+  its own file and ancestor locks even if it throws before returning a node.
+
+References for these questions are the
+[API rules](https://docs.nextcloud.com/server/stable/developer_manual/digging_deeper/api.html),
+[storage backend](https://github.com/nextcloud/server/blob/v35.0.2/lib/private/Files/Storage/Common.php),
+[storage registry](https://github.com/nextcloud/server/blob/v35.0.2/lib/private/Files/Cache/Storage.php),
+and [native stream write](https://github.com/nextcloud/server/blob/v35.0.2/lib/private/Files/View.php).
+
+## Files interface
+
+The loading indicator uses the Files SDK's list header and filter registrations
+to show status and suppress stale rows while Nextcloud loads the archive folder.
+The documented Files Router handles navigation. Its current route getters
+preserve the original folder and file focus when leaving the archive.
+[Files client APIs](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/files.html#router)
+
 ## Release acceptance
 
 The prior NC34/PostgreSQL/Redis baseline comprised 617 application checks plus
@@ -89,6 +121,17 @@ output, the previous session/filesystem after each job, restoration after a setu
 exception, and cleanup of only its own users and queue/task rows. Existing queue
 security and concurrency suites cover shared destinations, stream errors,
 cancellation, rollback, and transactional locking.
+
+The virtual-storage cleanup suite passed 158 checks on each of Nextcloud 34.0.5
+and 35.0.2 with SQLite. It covers removing 201 cache entries without a root or
+cached user mount, removing their extended metadata, and getting a fresh
+storage ID in the same PHP process. It also checks that active connections,
+source archives, and extracted files survive orphan cleanup.
+
+The same application tree passed 263 PHP checks and 564 HTTP assertions on
+each version with PostgreSQL and Redis. Native cron completed the queued
+extraction on both versions. Four Chromium scenarios passed on each version
+in separate browser runs against the same application tree.
 
 Each extraction job now owns one explicit `OperationBudget` with a monotonic
 300-second deadline. The same object covers indexing, all selected members,
@@ -109,7 +152,7 @@ Release gates must run these checks on both declared major versions and preserve
 native PROPFIND/GET/Range behavior, shared recipient aliases, parent moves,
 immediate access revocation including cached listings, source-version
 preconditions, and lock cleanup after failed or interrupted writes. Residual
-concrete mount/cache/storage/View dependencies remain an explicit maintenance
+concrete cache/storage/View dependencies remain an explicit maintenance
 boundary; successful compatibility tests do not turn them into public API.
 
 The architecture decision is **go for retaining documented native storage and

@@ -26,6 +26,17 @@ test.beforeEach(async ({ page, context }) => {
 
 test('native archive navigation, reload, literal names, download and return', async ({ page }) => {
   const archiveEndpoint = '/archives/' + fixture.sourceId
+  const zipListing = '**' + archiveEndpoint + '/browse-zip'
+  let finishRoot, finishFolder
+  const waitForRoot = new Promise(resolve => { finishRoot = resolve })
+  const waitForFolder = new Promise(resolve => { finishFolder = resolve })
+  await page.route(zipListing, async route => {
+    const { path } = route.request().postDataJSON()
+    if (path === '') await waitForRoot
+    if (path === 'Nested Юникод') await waitForFolder
+    await route.continue()
+  })
+  const loading = page.locator('.archive-tools-files-loading[role=status]')
   let fullInspections = 0
   page.on('request', request => {
     if (request.url().endsWith(archiveEndpoint + '/inspect')) fullInspections++
@@ -34,14 +45,23 @@ test('native archive navigation, reload, literal names, download and return', as
     && response.request().postDataJSON().path === '')
   await openRow(page, 'Browser.zip')
   await expect(page).toHaveURL(url => url.pathname.includes(nativeView))
+  await expect(loading).toHaveText('Opening archive…')
+  await expect(row(page, 'Browser.zip')).toBeHidden()
+  await expect(page.locator('[data-cy-files-navigation-item="files"]')).toBeVisible()
+  finishRoot()
   await expect(page.getByRole('button', { name: 'Back to Files', exact: true })).toBeVisible()
   const root = await (await rootListing).json()
   expect(root.entries.every(entry => !entry.path.includes('/'))).toBe(true)
+  await expect(loading).toBeHidden()
   const folderListing = page.waitForResponse(response => response.url().endsWith(archiveEndpoint + '/browse-zip')
     && response.request().postDataJSON().path === 'Nested Юникод')
   await openRow(page, 'Nested Юникод')
   await expect.poll(() => currentDir(page)).toBe('/Nested Юникод')
+  await expect(loading).toHaveText('Loading archive folder…')
+  await expect(row(page, 'README.txt')).toBeHidden()
+  finishFolder()
   await expect(row(page, 'notes.txt')).toBeVisible()
+  await expect(loading).toBeHidden()
   const folder = await folderListing
   expect(folder.request().postDataJSON().expectedEtag).toBe(root.sourceEtag)
   expect((await folder.json()).entries.map(entry => entry.path)).toContain('Nested Юникод/notes.txt')
@@ -72,6 +92,32 @@ test('native archive navigation, reload, literal names, download and return', as
   expect(currentDir(page)).toBe('/CI Archives')
   expect(new URL(page.url()).searchParams.has('openfile')).toBe(false)
   expect(fullInspections).toBe(0)
+})
+
+test('leaving a loading archive restores the regular file list', async ({ page }) => {
+  let releaseResponse
+  const delayedResponse = new Promise(resolve => { releaseResponse = resolve })
+  const endpoint = '**/archives/' + fixture.sourceId + '/browse-zip'
+  await page.route(endpoint, async route => {
+    await delayedResponse
+    // Leaving the view can abort the intercepted request before the gate opens.
+    await route.abort().catch(error => {
+      if (!error.message.includes('Route is already handled')) throw error
+    })
+  })
+
+  try {
+    await openRow(page, 'Browser.zip')
+    const loading = page.locator('.archive-tools-files-loading[role=status]')
+    await expect(loading).toHaveText('Opening archive…')
+    await page.goBack({ waitUntil: 'commit' })
+    await expect(loading).toBeHidden()
+    await expect(row(page, 'Browser.zip')).toBeVisible()
+    expect(currentDir(page)).toBe('/CI Archives')
+  } finally {
+    releaseResponse()
+    await page.unrouteAll({ behavior: 'wait' })
+  }
 })
 
 test('selection, native destination picker, queued extraction and pinned connection', async ({ page }) => {

@@ -423,6 +423,11 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
             for name, expected in files.items():
                 status, content = client.dav("GET", "Team/" + mount_name + "/" + name)
                 report.check(role + " reads exact bytes: " + name, status == 200 and content == expected, "HTTP " + str(status))
+        shared_paths = ("Team/" + mount_name, "Team/" + mount_name + "/nested/data.bin")
+        connection_ids = tuple(alice.file_id(path) for path in shared_paths)
+        report.check("shared WebDAV readers see the same archive file identities",
+                     all(tuple(clients[role].file_id(path) for path in shared_paths) == connection_ids
+                         for role in ("bob", "carol")))
         quota_after = alice.quota_used()
         report.data["homeQuotaUsed"] = {"beforeMount": quota_before, "afterMount": quota_after}
         report.check("virtual contents do not consume home quota", quota_before == quota_after,
@@ -448,6 +453,8 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         report.check("recipient can rename the local share alias", status in (201, 204), "HTTP " + str(status))
         status, content = bob.dav("GET", "Project/" + mount_name + "/readme.txt")
         report.check("connection survives recipient alias rename", status == 200 and content == files["readme.txt"])
+        report.check("recipient alias rename preserves archive file identities",
+                     tuple(bob.file_id(path.replace("Team/", "Project/", 1)) for path in shared_paths) == connection_ids)
         for role in ("alice", "carol"):
             status, content = clients[role].dav("GET", "Team/" + mount_name + "/readme.txt")
             report.check(role + " keeps the original shared path", status == 200 and content == files["readme.txt"])
@@ -455,6 +462,9 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         alice.ocs("DELETE", "/" + str(bob_share))
         status, _ = bob.dav("GET", "Project/" + mount_name + "/readme.txt")
         report.check("revocation blocks the recipient's cached DAV path", status in (403, 404), "HTTP " + str(status))
+        status, _ = bob.dav("PROPFIND", "Project/" + mount_name, headers={"Depth": "1"})
+        report.check("revocation blocks listings through the recipient's cached DAV path", status in (403, 404),
+                     "HTTP " + str(status))
         status, mounts = bob.api("GET", "/mounts")
         report.check("revocation removes connection metadata from recipient view", status == 200 and all(int(item["id"]) != mount_id for item in mounts))
         status, content = carol.dav("GET", "Team/" + mount_name + "/readme.txt")

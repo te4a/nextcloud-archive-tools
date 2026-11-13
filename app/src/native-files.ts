@@ -2,8 +2,8 @@ import { getRequestToken } from '@nextcloud/auth'
 import { showError, showSuccess } from '@nextcloud/dialogs'
 import { emit } from '@nextcloud/event-bus'
 import {
-  DefaultType, File, Folder, Permission, getFileActions, getFileListActions,
-  getFilesRegistry, getNavigation, registerFileAction, registerFileListHeader,
+  DefaultType, File, FileListFilter, Folder, Permission, getFileActions, getFileListActions,
+  getFilesRegistry, getNavigation, registerFileAction, registerFileListFilter, registerFileListHeader,
 } from '@nextcloud/files'
 import type { ActionContext, IFileAction, IFileListAction, IFolder, INode, IView, NodeData, ViewActionContext } from '@nextcloud/files'
 import { t } from '@nextcloud/l10n'
@@ -52,6 +52,23 @@ let headerElement: HTMLElement | null = null
 let dialogHost: HTMLElement | null = null
 let headerView: string | null = null
 let initialized = false
+
+class ArchiveLoadingFilter extends FileListFilter {
+  request?: { message: string }
+  hasVisibleRows = false
+
+  override filter(nodes: INode[]): INode[] {
+    this.hasVisibleRows = nodes.length > 0
+    return this.request ? [] : nodes
+  }
+
+  update(request?: { message: string }): void {
+    this.request = request
+    this.filterUpdated()
+  }
+}
+
+const archiveLoading = new ArchiveLoadingFilter('archive-tools-loading', Number.MAX_SAFE_INTEGER)
 
 /** Keep URL identity encoded while the Files UI and Router use literal names. */
 class ArchiveFile extends File {
@@ -204,7 +221,42 @@ async function loadArchiveListing(state: ArchiveViewState, member: string, passw
   }
 }
 
+function showArchiveLoading(state: ArchiveViewState, path: string, signal: AbortSignal): () => void {
+  if (signal.aborted) return () => {}
+
+  const request = { message: path === '/' ? tr('Opening archive…') : tr('Loading archive folder…') }
+  archiveLoading.update(request)
+  updateHeader(state)
+  const finish = () => {
+    signal.removeEventListener('abort', finish)
+    // Files applies the returned folder before the next paint.
+    requestAnimationFrame(() => {
+      if (archiveLoading.request !== request) return
+      archiveLoading.update()
+      updateHeader(state)
+    })
+  }
+  signal.addEventListener('abort', finish, { once: true })
+  return finish
+}
+
 async function getContents(state: ArchiveViewState, path: string, signal: AbortSignal): Promise<{ folder: IFolder; contents: INode[] }> {
+  const requestSignal = AbortSignal.any([signal, state.lifetime.signal])
+  const finish = showArchiveLoading(state, path, requestSignal)
+  try {
+    return await readContents(state, path, requestSignal)
+  } catch (error) {
+    // The native error panel is only visible when the list has no rows.
+    if (!requestSignal.aborted && !isAborted(error) && current(state) && archiveLoading.hasVisibleRows) {
+      showError(errorMessage(error))
+    }
+    throw error
+  } finally {
+    finish()
+  }
+}
+
+async function readContents(state: ArchiveViewState, path: string, signal: AbortSignal): Promise<{ folder: IFolder; contents: INode[] }> {
   if (state.invalid) throw new Error(tr('The archive changed. Open it again before continuing.'))
   const member = decodeArchiveDirectory(path)
   const lifetime = state.lifetime
@@ -385,13 +437,19 @@ async function promptPending(state: ArchiveViewState): Promise<void> {
 
 function updateHeader(state: ArchiveViewState): void {
   if (!headerElement || headerView !== state.view.id) return
+  const loading = archiveLoading.request
+  const status = headerElement.querySelector<HTMLElement>('.archive-tools-files-loading')
+  if (status) {
+    const message = loading?.message ?? ''
+    if (status.textContent !== message) status.textContent = message
+  }
   const title = headerElement.querySelector<HTMLElement>('[data-archive-name]')
   if (title) title.textContent = state.listing?.info.sourceName || state.sourceName || tr('Archive viewer')
   for (const button of headerElement.querySelectorAll<HTMLButtonElement>('button[data-archive-action]')) {
-    button.disabled = state.prompting || state.invalid || !state.listing
+    button.disabled = !!loading || state.prompting || state.invalid || !state.listing
     if (button.dataset.archiveAction === 'password') {
       button.hidden = !state.listing?.info.encrypted && !state.locked
-      button.disabled = state.prompting || state.invalid || (!state.listing?.info.encrypted && !state.locked)
+      button.disabled = !!loading || state.prompting || state.invalid || (!state.listing?.info.encrypted && !state.locked)
       button.textContent = state.password ? tr('Change password') : tr('Enter password')
     }
   }
@@ -422,8 +480,11 @@ function renderHeader(element: HTMLElement, _folder: IFolder, view: IView): void
   operations.href = generateUrl('/apps/archive_tools/')
   operations.textContent = tr('Operations')
   toolbar.append(operations)
+  const status = document.createElement('div')
+  status.className = 'archive-tools-files-loading'
+  status.setAttribute('role', 'status')
   dialogHost = document.createElement('div')
-  element.append(toolbar, dialogHost)
+  element.append(toolbar, status, dialogHost)
   const state = states.get(view.id)
   if (state) { updateHeader(state); void promptPending(state) }
 }
@@ -472,6 +533,7 @@ export function initializeNativeArchives(): void {
   initialized = true
   for (const action of getFileActions()) guardFileAction(action)
   for (const action of getFileListActions()) guardListAction(action)
+  registerFileListFilter(archiveLoading)
   getFilesRegistry().addEventListener('register:action', event => guardFileAction(event.detail))
   getFilesRegistry().addEventListener('register:listAction', event => guardListAction(event.detail))
   registerFileListHeader({

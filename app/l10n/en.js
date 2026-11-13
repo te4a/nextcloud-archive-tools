@@ -337,5 +337,7 @@ OC.L10N.register("archive_tools", {
     "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.": "The server archive metadata limit has been reached. Ask an administrator to disconnect unused archives or clear completed task history.",
     "The ZIP extraction selection contains too many entries. Select fewer files or folders.": "The ZIP extraction selection contains too many entries. Select fewer files or folders.",
     "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.": "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.",
-    "The requested folder is not present in the ZIP archive.": "The requested folder is not present in the ZIP archive."
+    "The requested folder is not present in the ZIP archive.": "The requested folder is not present in the ZIP archive.",
+    "Opening archive…": "Opening archive…",
+    "Loading archive folder…": "Loading archive folder…"
 }, "nplurals=2; plural=(n != 1);");

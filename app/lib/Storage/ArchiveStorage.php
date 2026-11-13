@@ -50,6 +50,9 @@ final class ArchiveStorage extends Common {
         $this->reader = $parameters['reader'];
         $this->crypto = $parameters['crypto'];
         $this->mimeTypes = $parameters['mimeTypes'];
+        if (isset($parameters['onConstructed'])) {
+            $parameters['onConstructed']($this);
+        }
     }
 
     public function getId(): string {

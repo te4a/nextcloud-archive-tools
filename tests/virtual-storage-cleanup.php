@@ -5,7 +5,6 @@ declare(strict_types=1);
 if (PHP_SAPI !== 'cli' || !preg_match('/^[a-f0-9]{32}$/D', (string)getenv('ARCHIVE_TOOLS_LIFECYCLE_FIXTURE'))) { exit(2); }
 define('OC_CONSOLE', true);
 require '/var/www/html/lib/base.php';
-\OC_App::registerAutoloading('archive_tools', '/var/www/html/custom_apps/archive_tools');
 \OC_App::loadApps();
 $server = \OC::$server;
 $config = $server->get(\OCP\IConfig::class);
@@ -52,6 +51,19 @@ function virtualRows(int $storage): int {
     global $db;
     $qb = $db->getQueryBuilder();
     return (int)$qb->select($qb->func()->count('*'))->from('filecache')->where($qb->expr()->eq('storage', $qb->createNamedParameter($storage)))->executeQuery()->fetchOne();
+}
+function virtualMountRows(int $storage): int {
+    global $db;
+    $qb = $db->getQueryBuilder();
+    return (int)$qb->select($qb->func()->count('*'))->from('mounts')
+        ->where($qb->expr()->eq('storage_id', $qb->createNamedParameter($storage)))->executeQuery()->fetchOne();
+}
+function virtualExtendedRows(array $fileIds): int {
+    global $db;
+    $qb = $db->getQueryBuilder();
+    return (int)$qb->select($qb->func()->count('*'))->from('filecache_extended')
+        ->where($qb->expr()->in('fileid', $qb->createNamedParameter($fileIds, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT_ARRAY)))
+        ->executeQuery()->fetchOne();
 }
 function virtualFootprint(): array {
     global $db;
@@ -131,7 +143,7 @@ try {
         virtualCheck('the normal connected archive returns real member bytes before deletion', $folder->get('Storage cleanup/Connected/nested/member.txt')->getContent() === 'Virtual cache fixture bytes.');
         virtualCheck('real disconnect succeeds in a fresh request context', $server->get(MountController::class)->destroy($fixture['current']['id'])->getStatus() === 200);
         virtualCheck('disconnect removes its exact storage mapping and cache entries', virtualExisting($fixture['current']['identity']) === null && virtualRows($fixture['current']['storage']) === 0);
-        virtualCheck('disconnect removes all cached user mount projections for its storage', $mountCache->getMountsForStorageId($fixture['current']['storage']) === []);
+        virtualCheck('disconnect removes all cached user mount projections for its storage', virtualMountRows($fixture['current']['storage']) === 0);
         virtualCheck('repeated connect and disconnect do not grow virtual cache footprint', virtualFootprint() === $fixture['baseline']);
     } elseif ($action === 'live') {
         virtualFolder();
@@ -185,7 +197,7 @@ try {
         virtualCheck('the next batch resumes after the deletion limit and drains the other twenty orphans', $result['removed'] === 20 && $result['cursor'] > $fixture['secondCursor']);
         foreach ($fixture['orphans'] as $row) {
             virtualCheck('orphan removal clears its cache and storage identity', virtualExisting($row['identity']) === null && virtualRows($row['storage']) === 0);
-            virtualCheck('orphan removal clears cached user mount projections', $mountCache->getMountsForStorageId($row['storage']) === []);
+            virtualCheck('orphan removal clears cached user mount projections', virtualMountRows($row['storage']) === 0);
         }
         foreach ($fixture['malformed'] as $row) { virtualCheck('malformed or out-of-range identities remain untouched', virtualExisting($row['identity']) === $row['storage'] && virtualRows($row['storage']) >= 2); }
         $extra['pass'] = $result;
@@ -197,6 +209,27 @@ try {
         }
         virtualCheck('a completed cursor cycle wraps without starving an earlier newly eligible orphan', $wrapped && virtualExisting($fixture['leasedOrphan']['identity']) === null);
         virtualCheck('reaping an expired orphan still preserves every live version', count(array_filter($fixture['liveVersions'], fn (array $row): bool => virtualExisting($row['identity']) !== null)) === 1000);
+    } elseif ($action === 'rootless') {
+        $identity = 'archive_tools:999999999:' . substr(hash('sha256', getenv('ARCHIVE_TOOLS_LIFECYCLE_FIXTURE')), 0, 24);
+        $cache = (new MetadataOnlyStorage(['identity' => $identity]))->getCache();
+        $numeric = $cache->getNumericStorageId();
+        $fileIds = [];
+        for ($i = 0; $i < 201; ++$i) {
+            $fileIds[] = $cache->put('rootless-' . $i . '.txt', [
+                'mimetype' => 'text/plain', 'size' => 1, 'mtime' => 1, 'creation_time' => 1, 'permissions' => 1, 'parent' => 999999999,
+            ]);
+        }
+        virtualCheck('the legacy orphan has more than one batch of entries and no cache root or mount',
+            $cache->get('') === false && virtualMountRows($numeric) === 0 && virtualRows($numeric) === 201);
+        virtualCheck('the rootless fixtures include extended metadata', virtualExtendedRows($fileIds) === 201);
+        $appConfig->setValueInt(Application::APP_ID, VirtualStorageCleanup::CURSOR_KEY, $numeric - 1);
+        virtualCheck('the orphan reaper removes a storage with no root or cached user mount', virtualReap()['removed'] === 1);
+        virtualCheck('the bounded cache search removes every batch before removing the registry entry',
+            virtualRows($numeric) === 0 && virtualExisting($identity) === null);
+        virtualCheck('native cache removal also deletes extended metadata for rootless entries', virtualExtendedRows($fileIds) === 0);
+        $replacement = (new MetadataOnlyStorage(['identity' => $identity]))->getCache()->getNumericStorageId();
+        virtualCheck('the same PHP process allocates a fresh storage ID after cleanup', $replacement !== $numeric && virtualExisting($identity) === $replacement);
+        virtualCheck('the re-created storage is reaped on a later pass', virtualReap()['removed'] === 1 && virtualExisting($identity) === null);
     } elseif ($action === 'remove-live') {
         $repo->delete($fixture['liveId']);
         virtualCheck('normal repository disconnect removes a connection with more than one cache page', $repo->find($fixture['liveId']) === null && virtualExisting($fixture['liveIdentity']) === null);

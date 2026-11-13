@@ -5,9 +5,15 @@ namespace OCA\ArchiveTools\Service;
 
 use OC\Files\Cache\Storage;
 use OCA\ArchiveTools\AppInfo\Application;
+use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\Config\IUserMountCache;
+use OCP\Files\FileInfo;
+use OCP\Files\Search\ISearchOperator;
+use OCP\Files\Search\ISearchOrder;
+use OCP\Files\Search\ISearchQuery;
 use OCP\IAppConfig;
 use OCP\IDBConnection;
+use OCP\IUser;
 use OCP\Lock\ILockingProvider;
 use OCP\Lock\LockedException;
 
@@ -127,19 +133,36 @@ final class VirtualStorageCleanup {
         $cache = $storage->getCache();
         if ($cache->getNumericStorageId() !== $numeric) { throw new \RuntimeException('The archive cache identity changed during cleanup.'); }
         $cache->remove('');
+        // An interrupted scan can leave rows outside the cached root tree.
+        $query = new class ($cache->getQueryFilterForStorage()) implements ISearchQuery {
+            public function __construct(private ISearchOperator $filter) {}
+            public function getSearchOperation(): ISearchOperator { return $this->filter; }
+            public function getLimit(): int { return 200; }
+            public function getOffset(): int { return 0; }
+            public function getOrder(): array {
+                return [new class implements ISearchOrder {
+                    public function getDirection(): string { return self::DIRECTION_ASCENDING; }
+                    public function getField(): string { return 'fileid'; }
+                    public function getExtra(): string { return ''; }
+                    public function sortFileInfo(FileInfo $a, FileInfo $b): int { return $a->getId() <=> $b->getId(); }
+                }];
+            }
+            public function getUser(): ?IUser { return null; }
+            public function limitToHome(): bool { return false; }
+            public function getSelectFields(): array { return []; }
+        };
         $previousPaths = null;
         do {
-            $qb = $this->db->getQueryBuilder();
-            $paths = $qb->select('path')->from('filecache')->where($qb->expr()->eq('storage', $qb->createNamedParameter($numeric)))
-                ->orderBy('fileid')->setMaxResults(200)->executeQuery()->fetchFirstColumn();
+            $paths = array_map(static fn (ICacheEntry $entry): string => $entry->getPath(), $cache->searchQuery($query));
             if ($paths !== [] && $paths === $previousPaths) { throw new \RuntimeException('The archive cache metadata could not be removed.'); }
-            foreach ($paths as $path) { $cache->remove((string)$path); }
+            foreach ($paths as $path) { $cache->remove($path); }
             $previousPaths = $paths;
         } while ($paths !== []);
         $this->mountCache->remoteStorageMounts($numeric);
         $qb = $this->db->getQueryBuilder();
         $removed = $qb->delete('storages')->where($qb->expr()->eq('numeric_id', $qb->createNamedParameter($numeric)))
             ->andWhere($qb->expr()->eq('id', $qb->createNamedParameter($id)))->executeStatement();
+        // The registry's in-process mapping would otherwise keep the removed ID alive.
         Storage::getGlobalCache()->clearCache();
         return $removed === 1;
     }

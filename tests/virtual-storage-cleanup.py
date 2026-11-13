@@ -88,7 +88,7 @@ def run(report) -> None:
             phase('connect')
             phase('disconnect')
         for action in ['live', 'active-connection', 'seed-orphans', 'first-page', 'second-page',
-                       'third-page', 'lease-expired', 'remove-live', 'remove-all']:
+                       'third-page', 'lease-expired', 'rootless', 'remove-live', 'remove-all']:
             phase(action)
         report.data['status'] = 'passed'
     finally:

@@ -4,7 +4,7 @@
 
 Archive Tools is a native Nextcloud application for browsing archives inside Files, extracting selected entries through the background queue, and connecting archives as shared read-only folders accessible through WebDAV.
 
-The current prerelease is `0.5.0-beta.3`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
+The current prerelease is `0.5.0-beta.4`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
 
 ![Archive browsing inside Nextcloud Files](docs/images/native-files.png)
 

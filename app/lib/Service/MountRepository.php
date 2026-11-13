@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace OCA\ArchiveTools\Service;
 
+use OCP\Files\Cache\IFileAccess;
 use OCP\IDBConnection;
 use OCP\Lock\ILockingProvider;
 
@@ -12,7 +13,12 @@ final class MountRepository {
     private array $activeLeases = [];
     private const LEASE_SECONDS = 300;
 
-    public function __construct(private IDBConnection $db, private ILockingProvider $locks, private VirtualStorageCleanup $virtualStorageCleanup) {}
+    public function __construct(
+        private IDBConnection $db,
+        private ILockingProvider $locks,
+        private VirtualStorageCleanup $virtualStorageCleanup,
+        private IFileAccess $fileCache,
+    ) {}
 
     public function findAll(): array {
         $qb = $this->db->getQueryBuilder();
@@ -220,18 +226,22 @@ final class MountRepository {
         $qb->delete('archive_tools_leases')->where($qb->expr()->lte('expires_at', $qb->createNamedParameter($now ?? time())))->executeStatement();
     }
 
-    /** Global cache evidence is used only for confirmed deletion, never to grant access. */
-    public function sourceCacheInfo(int $sourceId): ?array {
-        $qb = $this->db->getQueryBuilder();
-        $row = $qb->select('fileid', 'path', 'etag', 'storage')->from('filecache')
-            ->where($qb->expr()->eq('fileid', $qb->createNamedParameter($sourceId)))->executeQuery()->fetchAssociative();
-        if ($row === false) {
-            return null;
+    /** A recipient losing a share does not establish that the original file was removed. */
+    public function isSourceMissing(int $sourceId): bool {
+        $entry = $this->fileCache->getByFileId($sourceId);
+        if ($entry === null) {
+            return true;
         }
+        if (!str_starts_with($entry->getPath(), 'files_trashbin/')) {
+            return false;
+        }
+        // The public cache entry exposes only the numeric storage ID. The
+        // string identity distinguishes home trash from a similarly named folder.
         $qb = $this->db->getQueryBuilder();
-        $row['storage_string_id'] = $qb->select('id')->from('storages')
-            ->where($qb->expr()->eq('numeric_id', $qb->createNamedParameter((int)$row['storage'])))->executeQuery()->fetchOne();
-        return $row;
+        $storageId = $qb->select('id')->from('storages')
+            ->where($qb->expr()->eq('numeric_id', $qb->createNamedParameter((int)$entry->getStorageId())))
+            ->executeQuery()->fetchOne();
+        return is_string($storageId) && str_starts_with($storageId, 'home::');
     }
 
     private function lockKey(int $id): string {
