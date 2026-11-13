@@ -6,15 +6,17 @@ Archive Tools runs inside an existing Nextcloud installation. Use a test instanc
 
 The candidate targets Nextcloud 34–35, PHP 8.5, a 64-bit runtime and the `intl` extension. ZIP uses `zip`; TAR.GZ uses `zlib`. Plain TAR uses PHP directly.
 
-For 7z, RAR, TAR.BZ2 and TAR.XZ, install full 7-Zip and `util-linux` with `/usr/bin/prlimit`. PHP must allow the process functions used by the archive reader. The app checks the fixed executable paths `/usr/bin/7zz`, `/usr/local/bin/7zz`, `/usr/bin/7z` and `/usr/local/bin/7z`.
+The `0.5.0-beta.2` package includes the official 7-Zip 26.06 `7zz` binaries for Linux x86-64 and ARM64 in `archive_tools/bin/`. For 7z, RAR, TAR.BZ2 and TAR.XZ, Archive Tools first probes the binary for the current architecture. The filesystem holding the binary must permit execution. If the installer strips execute permissions, the application attempts to restore them for that binary.
 
-The official full Linux 7-Zip build includes the RAR decoder. Some distribution builds can list a RAR archive without decoding it. Verify the capabilities with the diagnostic command after installation.
+If the bundled binary is unavailable or fails the probe, the app tries `/usr/local/bin/7zz`, `/usr/bin/7zz`, `/usr/local/bin/7z`, and `/usr/bin/7z` in that order. The official full Linux build includes the RAR decoder. Some distribution builds can list a RAR archive without decoding it. Verify the available formats with the diagnostic command after installation. [7-Zip downloads](https://www.7-zip.org/download.html)
+
+Either decoder requires an executable `/usr/bin/prlimit` from `util-linux`. PHP must allow `proc_open`, `proc_get_status`, `proc_terminate`, `proc_close`, and at least one of `link` or `symlink` to isolate the archive input. Check the PHP configuration and permissions used by both web requests and cron.
 
 ## Official Docker image
 
-The repository's `dev/Dockerfile` adds the pinned full 7-Zip build to `nextcloud:34.0.5-apache`. It targets x86-64. Keep the base Nextcloud version consistent with the installed instance; a lower major version must not use an upgraded Nextcloud data volume.
+The bundled decoder runs from the application directory inside the existing Nextcloud PHP container. When web and cron run as separate services, use the same application files and runtime dependencies on the same architecture in both.
 
-For an existing Compose installation with `app` and `cron`, use the same derived image for both:
+If you need the system decoder fallback, the repository's example Dockerfile adds full 7-Zip to the x86-64 `nextcloud:34.0.5-apache` image. Match the base image to your installed Nextcloud version. For an existing Compose installation with `app` and `cron`, use the same derived image for both. [Example Dockerfile](../dev/Dockerfile)
 
 ```yaml
 services:
@@ -29,7 +31,7 @@ services:
 
 Copy the example Dockerfile to `Dockerfile.nextcloud` in that project's build context. Preserve the existing data volumes, database and Redis configuration, ports, and cron entrypoint. Build the derived image and recreate the existing PHP services through the deployment's normal update procedure.
 
-Adding binaries to a running container is temporary; the derived image makes them available after recreation. No Archive Tools worker service is required.
+The derived image keeps the system decoder available after container recreation. Archive Tools uses the existing Nextcloud background queue and cron service.
 
 ## Application package
 
@@ -51,7 +53,7 @@ If CLI activation leaves stale web routes, restart the PHP service through the d
 
 The diagnostic report should identify the expected database, supported archive formats and a recent cron run. Confirm a small archive opens inside Files. Test extraction to a new folder and a read-only connection. If shared folders are used, verify access through a recipient's account and confirm that revoking the share blocks subsequent reads.
 
-A beta release registered in the App Store can be installed individually with `occ app:install --allow-unstable archive_tools`. That command requires a published compatible release. The current local candidate is not itself an App Store publication.
+A compatible beta published in the App Store can be installed individually with `occ app:install --allow-unstable archive_tools`.
 
 ## Resource limits and task history
 

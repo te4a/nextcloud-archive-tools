@@ -1,6 +1,6 @@
 # Stable release preparation
 
-Archive Tools targets a first public stable release after beta and release-candidate testing. The intended sequence is `0.5.0-beta.1`, `0.5.0-rc.1`, then `0.5.0`. A version suffix identifies a prerelease; it does not relax App Store publishing requirements.
+Archive Tools targets a first public stable release after beta and release-candidate testing. The current beta candidate is `0.5.0-beta.2`, followed by `0.5.0-rc.1` and `0.5.0`. A version suffix identifies a prerelease; it does not relax App Store publishing requirements.
 
 ## Release scope
 
@@ -31,6 +31,8 @@ Keep signing keys outside published source and artifacts. Obtain an app certific
 ## Building and signing the exact artifact
 
 The runtime package contains compiled assets, PHP, translations, licence texts, release notes and versioned source links. Development dependencies and test fixtures stay in the source repository. Vite generates the bundled dependency notices at `app/js/THIRD_PARTY_LICENSES.md` during the normal build.
+
+The package includes the two upstream static 7-Zip binaries, the corresponding source archive and upstream licence notices under `app/bin/`. The packager verifies their pinned SHA-256 values. Preserve those notices and update the source archive and checksums together when upgrading 7-Zip. [Bundled 7-Zip](../app/bin/README.md)
 
 With all changes committed and the release gates complete:
 

@@ -17,31 +17,76 @@ final class SevenZipReader {
 
     public function available(): bool { return $this->binary() !== null; }
 
-    private function binary(): ?string {
+    private function binary(?OperationBudget $budget = null): ?string {
         if (!ProcessStream::available() || (!function_exists('link') && !function_exists('symlink'))) { return null; }
         if ($this->binary !== null) { return $this->binary; }
+
+        $bundled = $this->bundledBinary();
+        if ($bundled !== null) {
+            // A file can pass is_executable() and still fail to start, for
+            // example under a mount policy or with an incompatible ELF loader.
+            $formats = $this->probeFormats($bundled, $budget);
+            if ($formats['7z'] ?? false) {
+                $this->formats = $formats;
+                return $this->binary = $bundled;
+            }
+        }
+
         foreach (['/usr/local/bin/7zz', '/usr/bin/7zz', '/usr/local/bin/7z', '/usr/bin/7z'] as $candidate) {
             if (is_file($candidate) && is_executable($candidate)) { return $this->binary = $candidate; }
         }
         return null;
     }
 
+    private function bundledBinary(): ?string {
+        if (PHP_OS_FAMILY !== 'Linux' || !function_exists('php_uname')) { return null; }
+        $name = match (php_uname('m')) {
+            'x86_64' => '7zz-linux-x64',
+            'aarch64' => '7zz-linux-arm64',
+            default => null,
+        };
+        if ($name === null) { return null; }
+
+        $directory = dirname(__DIR__, 2) . '/bin';
+        if (is_link($directory) || !is_dir($directory)) { return null; }
+        $candidate = $directory . '/' . $name;
+        $stat = @lstat($candidate);
+        if ($stat === false || ($stat['mode'] & 0170000) !== 0100000 || $stat['nlink'] !== 1) {
+            return null;
+        }
+        if (!is_executable($candidate)) {
+            // Nextcloud's application installer copies contents and may drop
+            // executable bits. Repair only this known, regular bundled file.
+            if (!function_exists('chmod') || !@chmod($candidate, 0755)) { return null; }
+            clearstatcache(true, $candidate);
+        }
+        return is_executable($candidate) ? $candidate : null;
+    }
+
     public function supports(string $format, ?OperationBudget $budget = null): bool {
         $budget?->check();
-        if (!$this->available()) { return false; }
-        if ($this->formats === null) {
-            try {
-                $listing = ProcessStream::capture([$this->binary(), 'i'], null, 262144, budget: $budget);
-                $this->formats = [];
-                foreach (['7z' => '7z', 'rar' => 'Rar', 'bzip2' => 'bzip2', 'xz' => 'xz'] as $id => $label) {
-                    $this->formats[$id] = preg_match('/^\s*(?:\d+\s+)?\S+\s+' . preg_quote($label, '/') . '\s/m', $listing) === 1;
-                }
-                // Some distro builds can list RAR headers but omit its decoder.
-                $this->formats['rar'] = $this->formats['rar'] && preg_match('/^.*\bD\b.*\bRar[135]\s*$/m', $listing) === 1;
-            } catch (OperationBudgetExceededException $error) { throw $error; }
-            catch (\Throwable) { $this->formats = []; }
-        }
+        $binary = $this->binary($budget);
+        if ($binary === null) { return false; }
+        $this->formats ??= $this->probeFormats($binary, $budget);
         return $this->formats[$format] ?? false;
+    }
+
+    private function probeFormats(string $binary, ?OperationBudget $budget): array {
+        try {
+            $listing = ProcessStream::capture([$binary, 'i'], null, 262144, budget: $budget);
+        } catch (OperationBudgetExceededException $error) {
+            throw $error;
+        } catch (\Throwable) {
+            return [];
+        }
+
+        $formats = [];
+        foreach (['7z' => '7z', 'rar' => 'Rar', 'bzip2' => 'bzip2', 'xz' => 'xz'] as $id => $label) {
+            $formats[$id] = preg_match('/^\s*(?:\d+\s+)?\S+\s+' . preg_quote($label, '/') . '\s/m', $listing) === 1;
+        }
+        // Some distro builds can list RAR headers but omit its decoder.
+        $formats['rar'] = $formats['rar'] && preg_match('/^.*\bD\b.*\bRar[135]\s*$/m', $listing) === 1;
+        return $formats;
     }
 
     private function command(string $operation, string $path, ?string $type = null): array {

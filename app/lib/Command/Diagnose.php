@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace OCA\ArchiveTools\Command;
 
 use OCA\ArchiveTools\Archive\ArchiveReader;
+use OCA\ArchiveTools\Archive\ProcessStream;
 use OCA\ArchiveTools\Service\SettingsService;
 use OCP\IConfig;
 use Symfony\Component\Console\Command\Command;
@@ -11,7 +12,7 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-/** Read-only operational report. No credentials, paths, owners or member names. */
+/** Operational report without credentials, user paths, owners or member names. */
 final class Diagnose extends Command {
     public function __construct(private ArchiveReader $reader, private SettingsService $settings, private IConfig $config) {
         parent::__construct();
@@ -35,12 +36,22 @@ final class Diagnose extends Command {
         $warnings = [];
         if ($mode !== 'cron') { $warnings[] = 'Set Nextcloud background jobs to cron mode.'; }
         if ($age === null || $age > 900) { $warnings[] = 'No recent Nextcloud cron execution was recorded. Check the scheduler.'; }
+        $archiveFormats = $this->reader->supportedFormats();
+        $missingFormats = array_diff(['7z', 'rar', 'tar.bz2', 'tar.xz'], $archiveFormats);
+        if ($missingFormats !== []) {
+            $hint = match (true) {
+                !ProcessStream::available() => 'Check util-linux (/usr/bin/prlimit) and the PHP process functions proc_open, proc_get_status, proc_terminate and proc_close in the web and cron environments.',
+                !function_exists('link') && !function_exists('symlink') => 'Enable PHP link or symlink for isolated decoder input in the web and cron environments.',
+                default => 'Check bundled 7-Zip execution or install a full system 7-Zip with the required codecs in the web and cron environments.',
+            };
+            $warnings[] = 'Unavailable archive formats: ' . implode(', ', $missingFormats) . '. ' . $hint;
+        }
         $data = [
             'applicationVersion' => $this->config->getAppValue('archive_tools', 'installed_version', ''),
             'phpVersion' => PHP_VERSION,
             'databaseType' => $this->config->getSystemValue('dbtype', 'unknown'),
             'extensions' => ['intl' => extension_loaded('intl'), 'zip' => extension_loaded('zip'), 'zlib' => extension_loaded('zlib')],
-            'archiveFormats' => $this->reader->supportedFormats(),
+            'archiveFormats' => $archiveFormats,
             'backgroundJobs' => ['mode' => $mode, 'lastRunAgeSeconds' => $age],
             'settings' => $this->settings->getSettings(),
             'warnings' => $warnings,

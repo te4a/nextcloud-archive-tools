@@ -4,7 +4,7 @@
 
 Archive Tools is a native Nextcloud application for browsing archives inside Files, extracting selected entries through the background queue, and connecting archives as shared read-only folders accessible through WebDAV.
 
-The `0.5.0-beta.1` source candidate is available for local testing. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
+The `0.5.0-beta.2` candidate is in preparation. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
 
 ![Archive browsing inside Nextcloud Files](docs/images/native-files.png)
 
@@ -24,11 +24,11 @@ Opening an archive is temporary and does not create a WebDAV folder. Use **Conne
 
 The release target is Nextcloud 34–35 and 64-bit PHP 8.5 with `intl`, on a Linux server using local data storage. ZIP requires PHP `zip`; TAR.GZ requires `zlib`.
 
-7z, RAR, TAR.BZ2 and TAR.XZ require a full 7-Zip build, `/usr/bin/prlimit`, and the PHP process functions used by the reader. A build that lists RAR files can still lack RAR decoding support. The server detects available capabilities and exposes the corresponding formats.
+The `0.5.0-beta.2` package includes the official 7-Zip 26.06 `7zz` decoder for Linux x86-64 and ARM64. Archive Tools uses the bundled decoder for 7z, RAR, TAR.BZ2 and TAR.XZ when it can run it. A system `7zz` or `7z` is the fallback. The server exposes the formats supported by the decoder it selects.
 
-In Docker, these dependencies belong in the existing Nextcloud PHP environment. When web and cron run as separate services, both use the image containing the archive tools. The supplied Dockerfile example targets x86-64 and the official `nextcloud:34.0.5-apache` image.
+These formats also require `/usr/bin/prlimit`, the PHP process functions, and the ability to create a hard link or symbolic link for the temporary archive input. The PHP runtime must be able to execute the selected decoder. Both web and cron must see the same application files and use the same architecture and runtime dependencies. See [installation requirements](docs/INSTALL.md#php-environment).
 
-The `0.5.0-beta.1` candidate passed its Nextcloud 34/35 compatibility matrix with PHP 8.5, PostgreSQL, SQLite, MariaDB and MySQL. Exact versions, assertion counts and remaining release gates are recorded in [validation results](docs/VALIDATION.md). Signing and a human pilot remain required before promotion to stable.
+The `0.5.0-beta.1` candidate passed its Nextcloud 34/35 compatibility matrix with PHP 8.5, PostgreSQL, SQLite, MariaDB and MySQL. Exact versions and assertion counts are available in the [beta.1 validation report](docs/VALIDATION.md).
 
 ## Installation and configuration
 
@@ -72,3 +72,5 @@ For the documented filesystem extension points and remaining implementation boun
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and test commands. Report ordinary defects in [Issues](https://github.com/te4a/nextcloud-archive-tools/issues), and vulnerabilities through [SECURITY.md](SECURITY.md).
 
 Copyright 2026 te4a and Archive Tools contributors. Licensed under **AGPL-3.0-or-later**; see [LICENSE](LICENSE). Test fixture provenance and third-party terms are documented in `tests/fixtures`.
+
+7-Zip is copyright Igor Pavlov and uses GNU LGPL as its main licence. The corresponding 26.06 source archive and the upstream notices, including the BSD and unRAR terms, accompany the binaries in `bin/`. [7-Zip](https://www.7-zip.org/) · [Upstream licence details](app/bin/License.txt)

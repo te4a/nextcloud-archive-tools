@@ -20,9 +20,20 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'app'
 STAGES = ROOT / '.release-staging'
 DIST = ROOT / 'dist'
-RUNTIME = ('appinfo', 'lib', 'templates', 'img', 'css', 'js', 'l10n')
+RUNTIME = ('appinfo', 'lib', 'templates', 'img', 'css', 'js', 'l10n', 'bin')
 REPOSITORY = 'https://github.com/te4a/nextcloud-archive-tools'
 SIGNATURE = 'appinfo/signature.json'
+# Official static 7zzs executables, corresponding source and unmodified notices.
+SEVEN_ZIP_FILES = {
+    'bin/7zz-linux-x64': '0b58a64e71ebdf53751cd954cad1cc552c6a11ef51336bee6acafbdc54c28c1f',
+    'bin/7zz-linux-arm64': '265e45b5847392c0cd97a84acb6b3f9933c3e43d698fb5a2979f5e9a80c05758',
+    'bin/7z2606-src.tar.xz': 'a4e374c8f864f51df48c2cfd0e1413ec3b2ea030deae852d6a655402ebb61ac4',
+    'bin/License.txt': '1790374e5352329cedb46ee3808930a88e9ca2f08b82b10fcf5cf605d2c301b1',
+    'bin/copying.txt': '1e7e6bae5a5bde32f1ae5a7c37a082d1ab03cf89354f7f936ac40be9e39a6531',
+    'bin/unRarLicense.txt': '17bd9fa4399092c777536fff045b41df76ec9d2ac4c9b8e7345d3b8b6ccc7976',
+}
+SEVEN_ZIP_NOTICE = 'bin/README.md'
+EXECUTABLES = {'bin/7zz-linux-x64', 'bin/7zz-linux-arm64'}
 
 
 def require(condition: bool, message: str) -> None:
@@ -83,6 +94,10 @@ def runtime_files() -> dict[str, bytes]:
                         'A private or development file appeared in the runtime tree.')
                 if relative != SIGNATURE:
                     result[relative] = path.read_bytes()
+    require({name for name in result if name.startswith('bin/')} == set(SEVEN_ZIP_FILES) | {SEVEN_ZIP_NOTICE},
+            'The runtime package must contain the complete 7-Zip distribution.')
+    for name, expected in SEVEN_ZIP_FILES.items():
+        require(digest(result[name]) == expected, f'The bundled 7-Zip file differs: {name}')
     for required in ('appinfo/info.xml', 'js/main.mjs', 'js/files.mjs', 'css/archive-tools.css', 'js/THIRD_PARTY_LICENSES.md'):
         require(required in result, 'Build the application frontend before packaging.')
     for metadata in ('LICENSE', 'CHANGELOG.md'):
@@ -202,7 +217,9 @@ def pack(stage: Path, metadata: dict, require_signature: bool) -> dict:
                     archive.addfile(item)
                 for relative, content in sorted(files.items()):
                     item = tarfile.TarInfo(metadata['appId'] + '/' + relative)
-                    item.size, item.mode, item.mtime = len(content), 0o644, epoch
+                    item.size = len(content)
+                    item.mode = 0o755 if relative in EXECUTABLES else 0o644
+                    item.mtime = epoch
                     archive.addfile(item, io.BytesIO(content))
         require(temporary.stat().st_size <= 20000000, 'The archive exceeds the App Store upload budget.')
         temporary.replace(output)

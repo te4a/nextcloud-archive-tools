@@ -27,6 +27,12 @@ class RuntimePackageTests(unittest.TestCase):
         (self.app / 'appinfo/info.xml').write_text('<info><id>archive_tools</id><version>0.5.0-beta.1</version></info>')
         for name in ('js/main.mjs', 'js/files.mjs', 'css/archive-tools.css', 'js/THIRD_PARTY_LICENSES.md'):
             (self.app / name).write_text('public runtime')
+        seven_zip = {}
+        for name in builder.SEVEN_ZIP_FILES:
+            content = ('Fixture for ' + name).encode()
+            (self.app / name).write_bytes(content)
+            seven_zip[name] = hashlib.sha256(content).hexdigest()
+        (self.app / builder.SEVEN_ZIP_NOTICE).write_text('Distribution notice')
         (self.app / 'src').mkdir()
         (self.app / 'src/development.ts').write_text('must stay outside package')
         for name in ('LICENSE', 'CHANGELOG.md'):
@@ -34,7 +40,8 @@ class RuntimePackageTests(unittest.TestCase):
         (self.root / 'package.json').write_text('{"version":"0.5.0-beta.1"}')
         self.patches = [patch.object(builder, 'ROOT', self.root), patch.object(builder, 'APP', self.app),
                         patch.object(builder, 'STAGES', self.root / '.release-staging'),
-                        patch.object(builder, 'DIST', self.root / 'dist')]
+                        patch.object(builder, 'DIST', self.root / 'dist'),
+                        patch.object(builder, 'SEVEN_ZIP_FILES', seven_zip)]
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)
@@ -54,7 +61,18 @@ class RuntimePackageTests(unittest.TestCase):
                 self.assertTrue(member.isfile() or member.isdir())
                 self.assertEqual(member.uid, 0)
                 self.assertEqual(member.gid, 0)
-                self.assertEqual(member.mode, 0o755 if member.isdir() else 0o644)
+                executable = member.name.removeprefix('archive_tools/') in builder.EXECUTABLES
+                self.assertEqual(member.mode, 0o755 if member.isdir() or executable else 0o644)
+            self.assertIn('archive_tools/bin/7z2606-src.tar.xz', names)
+
+    def test_missing_or_changed_decoder_is_rejected(self):
+        target = self.app / 'bin/7zz-linux-arm64'
+        target.unlink()
+        with self.assertRaisesRegex(RuntimeError, 'complete 7-Zip distribution'):
+            builder.prepare()
+        target.write_bytes(b'Unexpected executable')
+        with self.assertRaisesRegex(RuntimeError, '7-Zip file differs'):
+            builder.prepare()
 
     def test_staged_tampering_is_rejected(self):
         stage, metadata = builder.prepare()

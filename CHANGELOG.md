@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0-beta.2
+
+- Include 7-Zip 26.06 for Linux x86-64 and ARM64 so 7z, RAR, TAR.BZ2 and TAR.XZ work on compatible Nextcloud servers without a system 7-Zip installation.
+
 ## 0.5.0-beta.1
 
 Development candidate; public release preparation is in progress.

@@ -31,7 +31,8 @@ DEMO_USER = 'archive_demo'
 # Deliberately public fixture credentials, already used by dev/seed-demo.py.
 DEMO_PASSWORD = 'ArchiveTools-Local-Preview-2026!'
 BASE_URL = 'http://127.0.0.1:18080'
-ALLOWED_DIRS = {'appinfo', 'lib', 'templates', 'img', 'css', 'js', 'l10n', 'src'}
+ALLOWED_DIRS = {'appinfo', 'lib', 'templates', 'img', 'css', 'js', 'l10n', 'src', 'bin'}
+EXECUTABLES = {'bin/7zz-linux-x64', 'bin/7zz-linux-arm64'}
 LEGACY_METADATA_FILES = {'README.md', 'LICENSE', 'package.json', 'pnpm-lock.yaml',
                   'pnpm-workspace.yaml', 'tsconfig.json', 'vite.config.mjs', 'Dockerfile.nextcloud'}
 RUNTIME_METADATA_FILES = {'README.md', 'LICENSE', 'CHANGELOG.md', 'SOURCE.md'}
@@ -212,6 +213,9 @@ def unpack_package(package: Path, report) -> tuple[Path, Path]:
             if entry.isdir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
+            if relative.parts[0] == 'bin':
+                expected_mode = 0o755 if str(relative) in EXECUTABLES else 0o644
+                require(entry.mode == expected_mode, 'A bundled 7-Zip file has an unexpected mode.')
             require(0 <= entry.size <= 67108864 and entry.size <= 268435456 - expanded,
                     'The package exceeds its verification byte budget.')
             expanded += entry.size
