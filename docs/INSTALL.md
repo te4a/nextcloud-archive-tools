@@ -65,7 +65,13 @@ To allow users to browse larger ZIP archives, add this boolean setting to the Ne
 
 In Files, ZIP browsing allows up to 120,000 central directory records, 16 GiB of declared uncompressed contents, and 32 MiB of cumulative raw and normalized name bytes when this setting is enabled. Each response is also limited to 120,000 entries, including implied directories. The setting defaults to `false`, with ceilings of 10,000 entries, 4 GiB, and 8 MiB. Full ZIP index operations count implied directories toward their total entry limit.
 
-Opening a ZIP in Files shows the current folder's files and subfolders. Each folder request scans the ZIP central directory and returns only that folder's direct children. Test representative archives against your deployment's memory and request limits before enabling the option, especially if a single folder contains many files. Downloads and extraction still validate a full ZIP index. A selected member can be downloaded as a stream with a 4 GiB limit, without writing an extracted copy to disk. Connecting an archive uses the standard index limits. An extraction selection still has to fit within 10,000 indexed entries, 4 GiB of uncompressed contents, 8 MiB of names, and the task's metadata allowance. For a larger ZIP, select a subset that fits those limits. TAR, 7z, and RAR retain their standard index limits.
+Opening a ZIP in Files shows the current folder's files and subfolders. Each folder request scans the ZIP central directory and returns only that folder's direct children. Test representative archives against your deployment's memory and request limits before enabling the option, especially if a single folder contains many files. Downloads and extraction still validate a full ZIP index. A selected member can be downloaded as a stream with a 4 GiB limit, without writing an extracted copy to disk. An extraction selection still has to fit within 10,000 indexed entries, 4 GiB of uncompressed contents, 8 MiB of names, and the task's metadata allowance. For a larger ZIP, select a subset that fits those limits.
+
+## Maximum archive size for connections
+
+Under **Administration settings → Additional settings → Archive Tools**, set the maximum total uncompressed size for a new archive connection. The default is 4096 MiB (4 GiB). Enter a positive whole number in MiB. Its equivalent in bytes must fit in a PHP integer. Individual files in a connected archive are limited to 4 GiB. The standard index limits for entry counts, path depth, and name bytes apply.
+
+Changing the setting applies to new connections. Existing connections remain readable with their indexed size. Use **Connect archive** in the Files context menu when the archive exceeds the separate browsing limits.
 
 ## Resource limits and task history
 

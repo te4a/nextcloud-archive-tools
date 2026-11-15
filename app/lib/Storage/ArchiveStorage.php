@@ -35,6 +35,7 @@ final class ArchiveStorage extends Common {
     private ?File $source = null;
     private ?array $entries = null;
     private ?string $password = null;
+    private int $expandedBytes = 1;
     private bool $accessResolved = false;
     private bool $resolvingAccess = false;
     /** @var array<int, AccessCache> */
@@ -229,7 +230,7 @@ final class ArchiveStorage extends Common {
             if (!is_string($localPath) || $localPath === '') {
                 throw new StorageNotAvailableException('The archive source is unavailable.');
             }
-            $stream = $this->reader->stream($localPath, $entry['originalName'], $this->password);
+            $stream = $this->reader->streamForMount($localPath, $entry['originalName'], $this->password, $this->expandedBytes);
             if (!is_resource($stream)) {
                 throw new StorageNotAvailableException('The archive entry could not be read.');
             }
@@ -379,6 +380,7 @@ final class ArchiveStorage extends Common {
                 }
             }
             $this->password = empty($current['password']) ? null : $this->crypto->decrypt((string)$current['password']);
+            $this->expandedBytes = max(1, (int)($index['totalSize'] ?? 0));
             $this->entries = $entries;
             $this->accessResolved = true;
         } catch (\Throwable) {

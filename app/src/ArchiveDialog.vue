@@ -22,10 +22,13 @@ const error = ref(props.options.error ?? '')
 const busy = ref(false)
 const choosingDestination = ref(false)
 const destination = ref<{ id: string; name: string } | null>(null)
-const baseName = archiveBaseName(props.options.info?.sourceName ?? '')
+const directConnect = props.options.kind === 'connect' && !props.options.info ? props.options : undefined
+const baseName = archiveBaseName(props.options.info?.sourceName ?? directConnect?.sourceName ?? '')
 const folderName = ref(tr(props.options.kind === 'connect' ? '{name} (archive)' : '{name} (extracted)', { name: baseName }))
 const pinned = ref(false)
 const selected = compactSelection(props.options.members ?? [])
+const archivePasswordRequired = !!props.options.info?.encrypted
+const showArchivePassword = archivePasswordRequired || !!directConnect
 const request = new AbortController()
 let disposed = false
 
@@ -68,8 +71,7 @@ async function submit(): Promise<void> {
     } finally { busy.value = false }
     return
   }
-  const info = props.options.info
-  if (!info) return
+  const expectedEtag = props.options.info?.sourceEtag ?? directConnect?.expectedEtag
   busy.value = true
   error.value = ''
   try {
@@ -81,7 +83,7 @@ async function submit(): Promise<void> {
           folderName: folderName.value,
           members: selected,
           password: password.value || null,
-          expectedEtag: info.sourceEtag,
+          expectedEtag,
         }),
       })
       if (!disposed) emit('complete', { kind: 'extract', job })
@@ -89,7 +91,7 @@ async function submit(): Promise<void> {
       const mount = await api<Mount>('/mounts', {
         method: 'POST', signal: request.signal,
         body: JSON.stringify({ sourceId: props.options.sourceId, name: folderName.value,
-          password: password.value || null, pinned: pinned.value, expectedEtag: info.sourceEtag }),
+          password: password.value || null, pinned: pinned.value, expectedEtag }),
       })
       if (!disposed) emit('complete', { kind: 'connect', mount })
     }
@@ -133,10 +135,10 @@ onBeforeUnmount(() => {
         <input id="at-files-folder-name" v-model="folderName" type="text" required maxlength="200" :disabled="busy">
         <p v-if="options.kind === 'extract'" class="at-files-hint">{{ tr('Existing files are not overwritten. A conflicting destination is reported as an error.') }}</p>
         <label v-if="options.kind === 'connect' && settings.allowPin" class="at-files-checkbox"><input v-model="pinned" type="checkbox" :disabled="busy">{{ tr('Keep connected until manually disconnected') }}</label>
-        <template v-if="options.info?.encrypted">
+        <template v-if="showArchivePassword">
           <label for="at-files-password">{{ tr('Archive password') }}</label>
-          <input id="at-files-password" ref="passwordInput" v-model="password" type="password" autocomplete="off" required :disabled="busy">
-          <p v-if="options.kind === 'connect'" class="at-files-hint">{{ tr('Connecting this protected archive unlocks its contents for eligible folder participants. The password itself is not shared.') }}</p>
+          <input id="at-files-password" ref="passwordInput" v-model="password" type="password" autocomplete="off" :required="archivePasswordRequired" :disabled="busy">
+          <p v-if="options.kind === 'connect' && (archivePasswordRequired || password)" class="at-files-hint">{{ tr('Connecting this protected archive unlocks its contents for eligible folder participants. The password itself is not shared.') }}</p>
         </template>
       </template>
       <p v-if="error" class="at-files-error" role="alert">{{ error }}</p>

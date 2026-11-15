@@ -21,6 +21,7 @@ final class TarReader {
         private readonly int $maxDepth = 32,
         private readonly int $maxIndexNameBytes = 8388608,
         private readonly ?SevenZipReader $external = null,
+        private readonly ?MountArchiveLimits $mountLimits = null,
     ) {
         // Validate the shared policy without opening an archive.
         $this->builder();
@@ -151,7 +152,7 @@ final class TarReader {
         } elseif (str_starts_with($head, 'BZh') || str_starts_with($head, "\xfd7zXZ\0")) {
             $format = str_starts_with($head, 'BZh') ? 'tar.bz2' : 'tar.xz';
             $external = $this->external ?? new SevenZipReader();
-            $source = $external->compressedTarStream($path, $budget);
+            $source = $external->compressedTarStream($path, $budget, $this->mountLimits === null ? null : $this->processedByteBudget());
         } else {
             $source = @fopen($path, 'rb');
         }
@@ -256,6 +257,9 @@ final class TarReader {
             $local = [];
             $longName = null;
             $kind = $type === '5' ? 'dir' : 'file';
+            if ($kind === 'file') {
+                $this->mountLimits?->checkFileSize($size, $expanded);
+            }
             if (($kind === 'dir' && $size !== 0) || $size > $this->maxExpandedBytes - $expanded) {
                 throw new RuntimeException('The TAR archive exceeds the expanded size limit or reports an invalid size.');
             }

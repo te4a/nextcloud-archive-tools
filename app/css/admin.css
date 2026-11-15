@@ -6,7 +6,7 @@
     max-width: 700px;
 }
 
-.archive-tools-admin label[for="archive-tools-idle-timeout"] {
+.archive-tools-admin .archive-tools-setting > label:has(+ input[type="number"]) {
     display: block;
     margin-block-end: 8px;
 }

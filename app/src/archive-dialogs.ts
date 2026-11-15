@@ -2,16 +2,19 @@ import { createApp } from 'vue'
 import ArchiveDialog from './ArchiveDialog.vue'
 import type { ArchiveInfo, Job, Mount } from './types.ts'
 
-export interface ArchiveDialogOptions {
-  kind: 'password' | 'extract' | 'connect'
+interface ArchiveDialogBase {
   sourceId: string
-  info?: ArchiveInfo
   password?: string
-  members?: string[]
   error?: string
   signal?: AbortSignal
-  validatePassword: (password: string, signal: AbortSignal) => Promise<void>
 }
+
+export type ArchiveDialogOptions = ArchiveDialogBase & (
+  | { kind: 'password'; validatePassword: (password: string, signal: AbortSignal) => Promise<void>; info?: ArchiveInfo; members?: never }
+  | { kind: 'extract'; info: ArchiveInfo; members?: string[] }
+  | { kind: 'connect'; info: ArchiveInfo; members?: never }
+  | { kind: 'connect'; info?: never; sourceName: string; expectedEtag?: string; members?: never }
+)
 
 export type ArchiveDialogResult =
   | { kind: 'password'; password: string }
@@ -19,7 +22,7 @@ export type ArchiveDialogResult =
   | { kind: 'connect'; mount: Mount }
   | null
 
-/** Mount only in the element supplied by the public Files header API. */
+/** Mount in the caller's dialog host and remove the target after dismissal. */
 export function showArchiveDialog(container: HTMLElement, options: ArchiveDialogOptions): Promise<ArchiveDialogResult> {
   if (options.signal?.aborted) return Promise.resolve(null)
   return new Promise(resolve => {

@@ -34,6 +34,36 @@ final class ArchiveReader {
         return ($this->largeZip ?? $this->zip)->listDirectory($path, $directory, $password, $budget);
     }
 
+    public function inspectForMount(string $path, #[SensitiveParameter] ?string $password, int $maxExpandedBytes): array {
+        if ($maxExpandedBytes < MountArchiveLimits::MIN_EXPANDED_BYTES) {
+            throw new \InvalidArgumentException('Invalid archive connection size limit.');
+        }
+        return $this->mountReader($this->detect($path), new MountArchiveLimits($maxExpandedBytes))->inspect($path, $password);
+    }
+
+    /** @return resource */
+    public function streamForMount(string $path, string $originalName, #[SensitiveParameter] ?string $password, int $expandedBytes) {
+        $limits = new MountArchiveLimits($expandedBytes);
+        $format = $this->detect($path);
+        if ($format === 'zip') {
+            return $this->zip->stream($path, $originalName, $password);
+        }
+        if ($expandedBytes <= MountArchiveLimits::MAX_MEMBER_BYTES) {
+            $reader = in_array($format, ['tar', 'tar.gz', 'tar.bz2', 'tar.xz'], true) ? $this->tar : $this->sevenZip;
+        } else {
+            $reader = $this->mountReader($format, $limits);
+        }
+        return $reader->stream($path, $originalName, $password);
+    }
+
+    private function mountReader(string $format, MountArchiveLimits $limits): ZipReader|TarReader|SevenZipReader {
+        return match ($format) {
+            'zip' => new ZipReader(maxExpandedBytes: $limits->expandedBytes, maxMemberBytes: MountArchiveLimits::MAX_MEMBER_BYTES, mountLimits: $limits),
+            'tar', 'tar.gz', 'tar.bz2', 'tar.xz' => new TarReader(maxExpandedBytes: $limits->expandedBytes, external: $this->sevenZip, mountLimits: $limits),
+            default => new SevenZipReader(maxExpandedBytes: $limits->expandedBytes, mountLimits: $limits),
+        };
+    }
+
     /** @return resource */
     public function stream(string $path, string $originalName, #[SensitiveParameter] ?string $password = null, ?OperationBudget $budget = null) {
         $budget?->check();

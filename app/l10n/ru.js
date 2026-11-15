@@ -343,5 +343,13 @@ OC.L10N.register("archive_tools", {
     "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.": "Выбранные файлы и папки ZIP превышают ограничение размера. Выберите меньше файлов или папок.",
     "The requested folder is not present in the ZIP archive.": "Запрошенной папки нет в ZIP-архиве.",
     "Opening archive…": "Открываем архив…",
-    "Loading archive folder…": "Загружаем папку архива…"
+    "Loading archive folder…": "Загружаем папку архива…",
+    "Maximum expanded size of connected archives (MiB)": "Максимальный размер подключаемого архива после распаковки (МиБ)",
+    "This limit applies to the total uncompressed size when connecting a new archive.": "При новом подключении проверяется суммарный размер файлов в архиве без сжатия.",
+    "The expanded archive exceeds the {limit} MiB limit for new connections.": "Размер архива после распаковки превышает лимит в {limit} МиБ для новых подключений.",
+    "An archive member exceeds the 4 GiB size limit for connections.": "Один из файлов в архиве превышает допустимый размер 4 ГиБ для подключения.",
+    "Invalid archive connection size limit.": "Недопустимый лимит размера при подключении архива.",
+    "The archive exceeds the expanded size limit for connections.": "Размер архива после распаковки превышает лимит для подключений.",
+    "A file in the archive exceeds the maximum size for connected files.": "Размер файла внутри архива превышает допустимый предел для подключений.",
+    "The archive connection size limit must be a positive whole number in MiB that fits on this server.": "Укажите максимально допустимый размер подключаемого архива целым числом МиБ, больше нуля и в пределах возможностей сервера."
 }, "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);");

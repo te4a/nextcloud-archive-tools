@@ -31,6 +31,7 @@ final class ZipReader {
 		private readonly int $maxDepth = 32,
 		private readonly int $maxIndexNameBytes = self::MAX_INDEX_NAME_BYTES,
 		?int $maxMemberBytes = null,
+		private readonly ?MountArchiveLimits $mountLimits = null,
 	) {
 		$this->maxMemberBytes = $maxMemberBytes ?? $maxExpandedBytes;
 		if (PHP_INT_SIZE < 8 || $maxEntries < 1 || $maxExpandedBytes < 1 || $maxDepth < 1 || $maxIndexNameBytes < 1 || $this->maxMemberBytes < 1) {
@@ -282,6 +283,7 @@ final class ZipReader {
 		if (!is_int($size) || $size < 0 || !is_int($packedSize) || $packedSize < 0) {
 			throw new RuntimeException('The ZIP archive reports an invalid entry size.');
 		}
+		$this->mountLimits?->checkFileSize($size, $totalSize);
 		if ($size > $this->maxExpandedBytes - $totalSize) {
 			throw new RuntimeException('The ZIP archive exceeds the expanded size limit.');
 		}

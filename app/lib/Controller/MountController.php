@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace OCA\ArchiveTools\Controller;
 
 use OCA\ArchiveTools\Archive\ArchiveReader;
+use OCA\ArchiveTools\Archive\MountArchiveMemberTooLargeException;
+use OCA\ArchiveTools\Archive\MountArchiveSizeExceededException;
 use OCA\ArchiveTools\Service\ArchiveChangedException;
 use OCA\ArchiveTools\Service\ArchiveService;
 use OCA\ArchiveTools\Service\MountRepository;
@@ -34,7 +36,7 @@ final class MountController extends Controller {
         private IRootFolder $rootFolder,
         private MountRepository $mounts,
         private ArchiveService $archives,
-        private ArchiveReader $zip,
+        private ArchiveReader $reader,
         private ICrypto $crypto,
         private SettingsService $settings,
         private MountInvalidator $invalidator,
@@ -157,7 +159,12 @@ final class MountController extends Controller {
             if (!is_string($localPath)) {
                 throw new \RuntimeException('Unable to read the archive.');
             }
-            $index = $this->zip->inspect($localPath, $password);
+            $sizeLimitMiB = $this->settings->maxMountArchiveSizeMiB();
+            try {
+                $index = $this->reader->inspectForMount($localPath, $password, $sizeLimitMiB * SettingsService::BYTES_PER_MIB);
+            } catch (MountArchiveSizeExceededException) {
+                return $this->sizeLimitResponse($sizeLimitMiB);
+            }
             if ($index['encrypted'] && ($password === null || $password === '')) {
                 return new JSONResponse(['message' => $this->l->t('This archive requires a password.')], 422);
             }
@@ -165,7 +172,7 @@ final class MountController extends Controller {
             if ($index['encrypted']) {
                 foreach ($index['entries'] as $entry) {
                     if ($entry['type'] === 'file' && $entry['encrypted']) {
-                        $stream = $this->zip->stream($localPath, $entry['originalName'], $password);
+                        $stream = $this->reader->streamForMount($localPath, $entry['originalName'], $password, max(1, $index['totalSize']));
                         try { while (!feof($stream)) { if (fread($stream, 65536) === false) { throw new \RuntimeException('Unable to verify the archive password.'); } } }
                         finally { fclose($stream); }
                         break;
@@ -211,6 +218,8 @@ final class MountController extends Controller {
             return new JSONResponse(['message' => $this->l->t('The archive is currently in use. Try again when the operation has finished.')], 409);
         } catch (ResourceLimitException $e) {
             return new JSONResponse(['message' => $this->l->t($e->getMessage()), 'code' => 'resource_limit'], 429);
+        } catch (MountArchiveMemberTooLargeException) {
+            return new JSONResponse(['message' => $this->l->t('An archive member exceeds the 4 GiB size limit for connections.'), 'code' => 'mount_archive_member_size_limit'], 422);
         } catch (\InvalidArgumentException|\RuntimeException $e) {
             return new JSONResponse(['message' => $this->l->t($e->getMessage())], 422);
         } finally {
@@ -219,6 +228,14 @@ final class MountController extends Controller {
             }
             $activity?->close();
         }
+    }
+
+    private function sizeLimitResponse(int $limitMiB): JSONResponse {
+        return new JSONResponse([
+            'message' => str_replace('{limit}', (string)$limitMiB, $this->l->t('The expanded archive exceeds the {limit} MiB limit for new connections.')),
+            'code' => 'mount_archive_size_limit',
+            'limitMiB' => $limitMiB,
+        ], 422);
     }
 
     #[NoAdminRequired]

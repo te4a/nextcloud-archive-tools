@@ -15,6 +15,7 @@
         const openByClick = document.getElementById('archive-tools-open-by-click');
         const timeout = document.getElementById('archive-tools-idle-timeout');
         const allowPin = document.getElementById('archive-tools-allow-pin');
+        const mountSize = document.getElementById('archive-tools-mount-size');
         const retention = document.getElementById('archive-tools-jobs-retention');
 
         function showStatus(message, failed = false) {
@@ -26,6 +27,9 @@
             openByClick.checked = settings.openByClick;
             timeout.value = String(settings.idleTimeoutMinutes);
             allowPin.checked = settings.allowPin;
+            if (Number.isSafeInteger(settings.maxMountArchiveSizeMiB)) {
+                mountSize.value = String(settings.maxMountArchiveSizeMiB);
+            }
             retention.value = String(settings.jobsRetentionDays ?? 30);
         }
 
@@ -40,6 +44,12 @@
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             if (!form.reportValidity()) {
+                return;
+            }
+            const maxMountArchiveSizeMiB = mountSize.valueAsNumber;
+            if (!Number.isSafeInteger(maxMountArchiveSizeMiB)) {
+                showStatus(t('archive_tools', 'The archive connection size limit must be a positive whole number in MiB that fits on this server.'), true);
+                mountSize.focus();
                 return;
             }
             save.disabled = true;
@@ -57,6 +67,7 @@
                         openByClick: openByClick.checked,
                         idleTimeoutMinutes: Number(timeout.value),
                         allowPin: allowPin.checked,
+                        maxMountArchiveSizeMiB,
                         jobsRetentionDays: Number(retention.value),
                     }),
                 });

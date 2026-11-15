@@ -1,7 +1,7 @@
 import { registerFileAction, DefaultType, Permission } from '@nextcloud/files'
 import { loadState } from '@nextcloud/initial-state'
 import { t } from '@nextcloud/l10n'
-import { archiveIcon, initializeNativeArchives, isArchiveNode, isArchiveView, openNativeArchive } from './native-files.ts'
+import { archiveIcon, connectNativeArchive, initializeNativeArchives, isArchiveNode, isArchiveView, openNativeArchive } from './native-files.ts'
 import { archiveFormats } from './archive-format-capabilities.ts'
 import { supportedArchiveName } from './archive-formats.ts'
 import type { Settings } from './types.ts'
@@ -28,7 +28,8 @@ for (const action of ['open', 'extract', 'connect'] as const) {
       const { nodes } = context
       const id = nodes[0].id
       if (id === undefined) return false
-      await openNativeArchive(context, action)
+      if (action === 'connect') await connectNativeArchive(context)
+      else await openNativeArchive(context, action)
       return null
     },
   })

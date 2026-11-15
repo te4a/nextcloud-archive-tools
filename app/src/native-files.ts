@@ -39,7 +39,7 @@ interface ArchiveViewState {
   sourceId: string; sourceName?: string; view: IView; password: string; listing?: ArchiveListing; folder?: IFolder
   sourceEtag?: string; validatedDirectory?: string
   returnRoute: FilesReturnRoute | null; generation: number
-  invalid: boolean; locked: boolean; prompting: boolean; closing: boolean; pendingAction: 'extract' | 'connect' | null
+  invalid: boolean; locked: boolean; prompting: boolean; closing: boolean; pendingAction: 'extract' | null
   passwordError?: string
   lifetime: AbortController
 }
@@ -52,6 +52,7 @@ let headerElement: HTMLElement | null = null
 let dialogHost: HTMLElement | null = null
 let headerView: string | null = null
 let initialized = false
+let connectionPromptOpen = false
 
 class ArchiveLoadingFilter extends FileListFilter {
   request?: { message: string }
@@ -69,6 +70,10 @@ class ArchiveLoadingFilter extends FileListFilter {
 }
 
 const archiveLoading = new ArchiveLoadingFilter('archive-tools-loading', Number.MAX_SAFE_INTEGER)
+
+function notifyConnected(): void {
+  showSuccess(tr('Archive connected. Participants who can read this folder and archive can access its contents.'))
+}
 
 /** Keep URL identity encoded while the Files UI and Router use literal names. */
 class ArchiveFile extends File {
@@ -335,7 +340,27 @@ function ensureView(sourceId: string): ArchiveViewState {
   return state
 }
 
-export async function openNativeArchive(context: ActionContext, action: 'open' | 'extract' | 'connect'): Promise<void> {
+export async function connectNativeArchive(context: ActionContext): Promise<void> {
+  const source = context.nodes[0]
+  const sourceId = source?.id
+  if (!sourceId || connectionPromptOpen || archiveContext(context)) return
+  connectionPromptOpen = true
+  const host = document.createElement('div')
+  const sourceName = source.basename
+  const etag: unknown = source.attributes.etag
+  const expectedEtag = typeof etag === 'string' && etag.trim() !== '' ? etag : undefined
+  try {
+    const { showArchiveDialog } = await import('./archive-dialogs.ts')
+    const result = await showArchiveDialog(document.body.appendChild(host), { kind: 'connect', sourceId, sourceName, expectedEtag })
+    if (result?.kind === 'connect') {
+      notifyConnected()
+      if (context.folder.id === String(result.mount.parentId)) emit('files:node:updated', context.folder)
+    }
+  } catch (error) { if (!isAborted(error)) showError(errorMessage(error)) }
+  finally { host.remove(); connectionPromptOpen = false }
+}
+
+export async function openNativeArchive(context: ActionContext, action: 'open' | 'extract'): Promise<void> {
   const sourceId = context.nodes[0]?.id
   if (!sourceId || isArchiveView(context.view) || context.nodes.some(isArchiveNode)) return
   const state = ensureView(sourceId)
@@ -374,6 +399,8 @@ async function returnToFiles(state: ArchiveViewState): Promise<void> {
 
 async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' | 'connect', members: string[] = []): Promise<void> {
   if (!dialogHost?.isConnected || headerView !== state.view.id || !current(state) || state.prompting) return
+  const info = state.listing?.info
+  if (kind !== 'password' && !info) return
   const lifetime = state.lifetime
   const wasLocked = state.locked
   const host = dialogHost
@@ -384,9 +411,9 @@ async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' 
     const { showArchiveDialog } = await import('./archive-dialogs.ts')
     const staleBeforeMount = state.lifetime !== lifetime || !current(state) || dialogHost !== host || !host.isConnected
     if (staleBeforeMount) return
-    const result = await showArchiveDialog(host, {
-      kind, sourceId: state.sourceId, info: state.listing?.info, password: state.password, members,
-      error: kind === 'password' ? state.passwordError : undefined, signal: lifetime.signal,
+    const base = { sourceId: state.sourceId, password: state.password, signal: lifetime.signal }
+    const result = kind === 'password' ? await showArchiveDialog(host, {
+      ...base, kind, info, error: state.passwordError,
       validatePassword: async (password, signal) => {
         const listing = await loadArchiveListing(state, member, password, signal)
         if (state.sourceEtag !== undefined && listing.info.sourceEtag !== state.sourceEtag) {
@@ -394,7 +421,8 @@ async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' 
         }
         validatedListing = listing
       },
-    })
+    }) : info ? await showArchiveDialog(host, kind === 'extract'
+      ? { ...base, kind, info, members } : { ...base, kind, info }) : null
     if (state.lifetime !== lifetime || !current(state)) return
     if (result?.kind === 'password' && validatedListing) {
       state.password = result.password
@@ -414,7 +442,7 @@ async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' 
     } else if (result?.kind === 'extract') {
       showSuccess(tr('Extraction queued. You can leave this page; the operation will continue in the background.'))
     } else if (result?.kind === 'connect') {
-      showSuccess(tr('Archive connected. Participants who can read this folder and archive can access its contents.'))
+      notifyConnected()
     }
   } catch (error) { if (!isAborted(error)) showError(errorMessage(error)) }
   finally {

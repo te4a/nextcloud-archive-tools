@@ -26,6 +26,7 @@ final class EntryIndexBuilder {
         private readonly int $maxExpandedBytes = 4294967296,
         private readonly int $maxDepth = 32,
         private readonly int $maxIndexNameBytes = 8388608,
+        private readonly ?MountArchiveLimits $mountLimits = null,
     ) {
         if (PHP_INT_SIZE < 8 || min($maxEntries, $maxExpandedBytes, $maxDepth, $maxIndexNameBytes) < 1) {
             throw new RuntimeException('Archive limits require positive values and 64-bit PHP.');
@@ -83,6 +84,9 @@ final class EntryIndexBuilder {
         }
         if (isset($this->entries[$path])) {
             throw new RuntimeException('The archive uses the same path for a file and a directory.');
+        }
+        if ($size >= 0) {
+            $this->mountLimits?->checkFileSize($size, $this->totalSize);
         }
         if ($size < 0 || $size > $this->maxExpandedBytes - $this->totalSize || $compressedSize < 0 || $compressedSize > PHP_INT_MAX - $this->packedSize) {
             throw new RuntimeException('The archive exceeds the expanded size limit or reports an invalid size.');

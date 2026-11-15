@@ -120,6 +120,39 @@ test('leaving a loading archive restores the regular file list', async ({ page }
   }
 })
 
+test('the Files menu can connect an archive without loading its preview', async ({ page }) => {
+  const previewRequests = []
+  await page.route('**/archives/' + fixture.sourceId + '/{browse-zip,inspect}', async route => {
+    previewRequests.push(route.request().url())
+    await route.abort()
+  })
+
+  const startingDirectory = currentDir(page)
+  const openConnect = async () => {
+    await row(page, 'Browser.zip').click({ button: 'right' })
+    await page.locator('[data-cy-files-list-row-action="archive-tools-connect"]').click()
+  }
+  const dialog = page.getByRole('dialog', { name: 'Connect as folder', exact: true })
+  await openConnect()
+  await expect(dialog.getByLabel('New folder name', { exact: true })).toHaveValue('Browser (archive)')
+  await expect(dialog.getByLabel('Archive password', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+
+  await openConnect()
+  await dialog.getByLabel('New folder name', { exact: true }).fill('Connected without preview')
+  const connected = page.waitForResponse(response => response.url().endsWith('/mounts') && response.request().method() === 'POST')
+  await dialog.getByRole('button', { name: 'Connect archive', exact: true }).click()
+  const response = await connected
+  expect(response.status()).toBe(201)
+  expect(response.request().postDataJSON().expectedEtag).toMatch(/^.+$/)
+  expect(previewRequests).toEqual([])
+  await expect(dialog).toHaveCount(0)
+  await expect(row(page, 'Connected without preview')).toBeVisible()
+  expect(currentDir(page)).toBe(startingDirectory)
+  expect(new URL(page.url()).pathname).not.toContain(nativeView)
+})
+
 test('selection, native destination picker, queued extraction and pinned connection', async ({ page }) => {
   await openRow(page, 'Browser.zip')
   // NcCheckboxRadioSwitch paints its label over the native input. Keyboard

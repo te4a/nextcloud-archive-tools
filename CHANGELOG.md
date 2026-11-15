@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Let administrators configure the maximum expanded size for new archive connections. The default is 4 GiB.
+- Open the connection dialog directly from the Files action menu so connecting an archive does not first load its browsing index.
+
 ## 0.5.0-beta.4
 
 - Show a loading indicator inside Nextcloud Files while an archive or one of its folders opens. Hide the previous folder's rows until the new listing is ready.

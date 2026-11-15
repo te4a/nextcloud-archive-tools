@@ -11,30 +11,40 @@ use OCP\IAppConfig;
 class SettingsService {
     public const MAX_IDLE_TIMEOUT_MINUTES = 10080;
     public const MAX_JOBS_RETENTION_DAYS = 3650;
+    public const DEFAULT_MOUNT_ARCHIVE_SIZE_MIB = 4096;
+    public const BYTES_PER_MIB = 1048576;
+    // Keep the conversion from MiB to bytes within the PHP integer range.
+    private const MAX_MOUNT_ARCHIVE_SIZE_MIB = PHP_INT_MAX >> 20;
 
     public function __construct(private IAppConfig $config, private LifecycleService $lifecycle) {
     }
 
-    /** @return array{openByClick: bool, idleTimeoutMinutes: int, allowPin: bool, jobsRetentionDays: int} */
+    /** @return array{openByClick: bool, idleTimeoutMinutes: int, allowPin: bool, jobsRetentionDays: int, maxMountArchiveSizeMiB: int} */
     public function getSettings(): array {
         return [
             'openByClick' => $this->config->getValueBool(Application::APP_ID, 'openByClick', true),
             'idleTimeoutMinutes' => $this->config->getValueInt(Application::APP_ID, 'idleTimeoutMinutes', 60),
             'allowPin' => $this->config->getValueBool(Application::APP_ID, 'allowPin', true),
             'jobsRetentionDays' => $this->config->getValueInt(Application::APP_ID, 'jobsRetentionDays', 30),
+            'maxMountArchiveSizeMiB' => $this->maxMountArchiveSizeMiB(),
         ];
+    }
+
+    public function maxMountArchiveSizeMiB(): int {
+        $limit = $this->config->getValueInt(Application::APP_ID, 'maxMountArchiveSizeMiB', self::DEFAULT_MOUNT_ARCHIVE_SIZE_MIB);
+        return $limit >= 1 && $limit <= self::MAX_MOUNT_ARCHIVE_SIZE_MIB ? $limit : self::DEFAULT_MOUNT_ARCHIVE_SIZE_MIB;
     }
 
     /**
      * Validate the complete request before writing any setting.
      *
-     * @return array{openByClick: bool, idleTimeoutMinutes: int, allowPin: bool, jobsRetentionDays: int}
+     * @return array{openByClick: bool, idleTimeoutMinutes: int, allowPin: bool, jobsRetentionDays: int, maxMountArchiveSizeMiB: int}
      */
-    public function update(mixed $openByClick, mixed $idleTimeoutMinutes, mixed $allowPin, mixed $jobsRetentionDays = null): array {
-        return $this->lifecycle->write(fn (): array => $this->updateReady($openByClick, $idleTimeoutMinutes, $allowPin, $jobsRetentionDays));
+    public function update(mixed $openByClick, mixed $idleTimeoutMinutes, mixed $allowPin, mixed $jobsRetentionDays = null, mixed $maxMountArchiveSizeMiB = null): array {
+        return $this->lifecycle->write(fn (): array => $this->updateReady($openByClick, $idleTimeoutMinutes, $allowPin, $jobsRetentionDays, $maxMountArchiveSizeMiB));
     }
 
-    private function updateReady(mixed $openByClick, mixed $idleTimeoutMinutes, mixed $allowPin, mixed $jobsRetentionDays): array {
+    private function updateReady(mixed $openByClick, mixed $idleTimeoutMinutes, mixed $allowPin, mixed $jobsRetentionDays, mixed $maxMountArchiveSizeMiB): array {
         if (!is_bool($openByClick) || !is_bool($allowPin)) {
             throw new InvalidArgumentException('The opening and pinning settings must be boolean values.');
         }
@@ -50,11 +60,19 @@ class SettingsService {
             || $jobsRetentionDays > self::MAX_JOBS_RETENTION_DAYS) {
             throw new InvalidArgumentException('The task history retention must be a whole number between 0 and 3650 days.');
         }
+        if ($maxMountArchiveSizeMiB !== null && (!is_int($maxMountArchiveSizeMiB)
+            || $maxMountArchiveSizeMiB < 1
+            || $maxMountArchiveSizeMiB > self::MAX_MOUNT_ARCHIVE_SIZE_MIB)) {
+            throw new InvalidArgumentException('The archive connection size limit must be a positive whole number in MiB that fits on this server.');
+        }
 
         $this->config->setValueBool(Application::APP_ID, 'openByClick', $openByClick);
         $this->config->setValueInt(Application::APP_ID, 'idleTimeoutMinutes', $idleTimeoutMinutes);
         $this->config->setValueBool(Application::APP_ID, 'allowPin', $allowPin);
         $this->config->setValueInt(Application::APP_ID, 'jobsRetentionDays', $jobsRetentionDays);
+        if ($maxMountArchiveSizeMiB !== null) {
+            $this->config->setValueInt(Application::APP_ID, 'maxMountArchiveSizeMiB', $maxMountArchiveSizeMiB);
+        }
 
         return $this->getSettings();
     }

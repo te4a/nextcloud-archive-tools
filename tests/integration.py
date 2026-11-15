@@ -39,6 +39,8 @@ DAV_NS = "DAV:"
 OC_NS = "http://owncloud.org/ns"
 API = "/index.php/apps/archive_tools"
 SHARES = "/ocs/v2.php/apps/files_sharing/api/v1/shares"
+MEBIBYTE = 1024 * 1024
+MAX_MOUNT_SIZE_MIB = (2**63 - 1) // MEBIBYTE
 
 
 class TestFailure(RuntimeError):
@@ -323,6 +325,64 @@ def fixture_zip() -> tuple[bytes, dict[str, bytes]]:
     return output.getvalue(), files
 
 
+def check_mount_size_limit(admin: Client, alice: Client, settings: dict, report: Report) -> None:
+    above_previous_ceiling = dict(settings, maxMountArchiveSizeMiB=16385)
+    report.check("administrator can set a limit above 16 GiB",
+                 admin.api("PUT", "/settings", above_previous_ceiling) == (200, above_previous_ceiling))
+    report.check("limit above 16 GiB persists through a fresh settings request",
+                 admin.api("GET", "/settings") == (200, above_previous_ceiling))
+
+    low_limit = dict(settings, maxMountArchiveSizeMiB=1)
+    high_limit = dict(settings, maxMountArchiveSizeMiB=MAX_MOUNT_SIZE_MIB)
+    report.check("administrator sets a 1 MiB mount limit", admin.api("PUT", "/settings", low_limit) == (200, low_limit))
+    legacy = {key: value for key, value in low_limit.items() if key != "maxMountArchiveSizeMiB"}
+    report.check("legacy settings request preserves the mount size limit", admin.api("PUT", "/settings", legacy) == (200, low_limit))
+
+    folder = "Mount size policy"
+    report.check("Alice creates the mount size fixture folder", alice.dav("MKCOL", folder)[0] == 201)
+    first_member = b"A" * (MEBIBYTE // 2)
+    source_ids = {}
+    for name, extra in (("equal", b""), ("over", b"x")):
+        second_member = b"B" * (MEBIBYTE // 2) + extra
+        with io.BytesIO() as output:
+            with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("first.txt", first_member)
+                archive.writestr("second.txt", second_member)
+            compressed = output.getvalue()
+        report.check("mount limit fixture is small when compressed: " + name, len(compressed) < MEBIBYTE)
+        path = folder + "/" + name + ".zip"
+        report.check("Alice uploads the mount limit ZIP: " + name, alice.dav("PUT", path, data=compressed)[0] == 201)
+        source_ids[name] = alice.file_id(path)
+
+    over = {"sourceId": source_ids["over"], "name": "Above 1 MiB", "pinned": False}
+    status, denied = alice.api("POST", "/mounts", over)
+    report.check("one byte above the aggregate mount limit is rejected", status == 422 and isinstance(denied, dict)
+                 and denied.get("code") == "mount_archive_size_limit" and denied.get("limitMiB") == 1, "HTTP " + str(status))
+    report.check("rejected mount leaves no connection or virtual folder",
+                 alice.api("GET", "/mounts") == (200, []) and over["name"] not in alice.names(folder))
+    status, listing = alice.api("POST", f'/archives/{source_ids["over"]}/browse-zip', {})
+    report.check("ZIP browsing remains available above the mount size limit", status == 200 and isinstance(listing, dict)
+                 and listing.get("totalSize") == MEBIBYTE + 1
+                 and {entry["path"] for entry in listing["entries"]} == {"first.txt", "second.txt"})
+
+    status, equal = alice.api("POST", "/mounts", {"sourceId": source_ids["equal"], "name": "Exactly 1 MiB", "pinned": False})
+    report.check("a mount exactly at the aggregate limit succeeds", status == 201 and isinstance(equal, dict), "HTTP " + str(status))
+    report.check("source member is readable at the exact limit",
+                 alice.dav("GET", folder + "/Exactly 1 MiB/first.txt") == (200, first_member))
+    report.check("exact-limit fixture connection is removed", alice.api("DELETE", f'/mounts/{equal["id"]}')[0] == 200)
+
+    report.check("administrator sets the highest mount limit that fits in a 64-bit byte count",
+                 admin.api("PUT", "/settings", high_limit) == (200, high_limit))
+    report.check("the maximum representable mount limit persists", admin.api("GET", "/settings") == (200, high_limit))
+    status, connected = alice.api("POST", "/mounts", over)
+    report.check("raising the cap allows the previously rejected connection",
+                 status == 201 and isinstance(connected, dict), "HTTP " + str(status))
+    report.check("administrator lowers the mount limit again", admin.api("PUT", "/settings", low_limit) == (200, low_limit))
+    report.check("lowering the limit leaves the existing connection readable through WebDAV",
+                 alice.dav("GET", folder + "/" + over["name"] + "/second.txt") == (200, b"B" * (MEBIBYTE // 2) + b"x"))
+    report.check("over-limit fixture connection is removed", alice.api("DELETE", f'/mounts/{connected["id"]}')[0] == 200)
+
+
 def run_tests(args: argparse.Namespace, report: Report) -> None:
     base = validate_base_url(args.base_url)
     report.data["baseUrl"] = base
@@ -360,6 +420,15 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         status, original = admin.api("GET", "/settings")
         report.check("administrator reads settings", status == 200 and isinstance(original, dict))
         original_settings = original
+        if CI_CONFIG:
+            report.check("fresh installation defaults to a 4096 MiB mount size limit",
+                         original_settings.get("maxMountArchiveSizeMiB") == 4096)
+        status, settings_page = admin.request("GET", "/index.php/settings/admin/additional")
+        mount_size_input = re.search(rb'<input\b[^>]*\sid="archive-tools-mount-size"[^>]*>', settings_page)
+        report.check("admin page renders the mount size field",
+                     status == 200 and mount_size_input is not None)
+        report.check("admin mount size field no longer caps input at 16 GiB",
+                     b'max="16384"' not in mount_size_input.group())
         invalid = dict(original_settings, idleTimeoutMinutes=-1)
         report.check("negative idle timeout rejected", admin.api("PUT", "/settings", invalid)[0] == 400)
         invalid = dict(original_settings, idleTimeoutMinutes=10081)
@@ -369,6 +438,9 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         for value in (-1, 3651, "30", False, 1.5):
             invalid = dict(original_settings, jobsRetentionDays=value, openByClick=not original_settings['openByClick'])
             report.check("invalid history retention rejected: " + repr(value), admin.api("PUT", "/settings", invalid)[0] == 400)
+        for value in (0, -1, "1", False, 1.5, MAX_MOUNT_SIZE_MIB + 1, 2**63):
+            invalid = dict(original_settings, maxMountArchiveSizeMiB=value, openByClick=not original_settings["openByClick"])
+            report.check("invalid mount size limit rejected: " + repr(value), admin.api("PUT", "/settings", invalid)[0] == 400)
         report.check("invalid settings do not partially persist", admin.api("GET", "/settings") == (200, original_settings))
         retention = dict(original_settings, jobsRetentionDays=7)
         report.check("administrator saves history retention", admin.api("PUT", "/settings", retention) == (200, retention))
@@ -380,6 +452,8 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         report.check("ordinary user cannot read admin settings", bob.api("GET", "/settings")[0] == 403)
         report.check("ordinary user cannot change global settings", bob.api("PUT", "/settings", valid)[0] == 403)
         report.check("administrator restores global settings", admin.api("PUT", "/settings", original_settings) == (200, original_settings))
+        check_mount_size_limit(admin, alice, original_settings, report)
+        report.check("administrator restores the mount size policy", admin.api("PUT", "/settings", original_settings) == (200, original_settings))
 
         report.check("Alice creates shared fixture folder", alice.dav("MKCOL", "Team")[0] == 201)
         archive, files = fixture_zip()

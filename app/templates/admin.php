@@ -1,4 +1,6 @@
 <?php
+use OCA\ArchiveTools\Service\SettingsService;
+
 /** @var \OCP\IL10N $l */
 ?>
 <section class="section archive-tools-admin" aria-labelledby="archive-tools-admin-title">
@@ -17,6 +19,11 @@
         <div class="archive-tools-setting">
             <input type="checkbox" class="checkbox" id="archive-tools-allow-pin" name="allowPin">
             <label for="archive-tools-allow-pin"><?php p($l->t('Allow archives to be pinned against automatic disconnection')); ?></label>
+        </div>
+        <div class="archive-tools-setting">
+            <label for="archive-tools-mount-size"><?php p($l->t('Maximum expanded size of connected archives (MiB)')); ?></label>
+            <input type="number" id="archive-tools-mount-size" name="maxMountArchiveSizeMiB" min="1" value="<?php p(SettingsService::DEFAULT_MOUNT_ARCHIVE_SIZE_MIB); ?>" step="1" required aria-describedby="archive-tools-mount-size-help">
+            <p class="settings-hint" id="archive-tools-mount-size-help"><?php p($l->t('This limit applies to the total uncompressed size when connecting a new archive.')); ?></p>
         </div>
         <div class="archive-tools-setting">
             <label for="archive-tools-jobs-retention"><?php p($l->t('Keep completed task history for (days)')); ?></label>

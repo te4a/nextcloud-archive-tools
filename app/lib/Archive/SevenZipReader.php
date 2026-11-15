@@ -5,6 +5,8 @@ namespace OCA\ArchiveTools\Archive;
 
 /** Optional native 7-Zip backend. It never extracts members to filesystem paths. */
 final class SevenZipReader {
+    private const TAR_STREAM_OVERHEAD = 33554432;
+
     private ?string $binary = null;
     private ?array $formats = null;
 
@@ -13,6 +15,7 @@ final class SevenZipReader {
         private readonly int $maxExpandedBytes = 4294967296,
         private readonly int $maxDepth = 32,
         private readonly int $maxIndexNameBytes = 8388608,
+        private readonly ?MountArchiveLimits $mountLimits = null,
     ) {}
 
     public function available(): bool { return $this->binary() !== null; }
@@ -146,7 +149,7 @@ final class SevenZipReader {
         if (!$this->supports($format, $budget)) { throw new \RuntimeException('This archive format requires system 7-Zip, util-linux and PHP proc_open.'); }
         $input = new IsolatedArchiveInput($path);
         $text = ProcessStream::capture($this->command('l', $input->path(), $type), $password, input: $input, budget: $budget);
-        $builder = new EntryIndexBuilder($this->maxEntries, $this->maxExpandedBytes, $this->maxDepth, $this->maxIndexNameBytes);
+        $builder = new EntryIndexBuilder($this->maxEntries, $this->maxExpandedBytes, $this->maxDepth, $this->maxIndexNameBytes, $this->mountLimits);
         foreach ($this->metadata($text) as $values) {
             $budget?->check();
             $attributes = $values['Attributes'] ?? '';
@@ -299,11 +302,12 @@ final class SevenZipReader {
         $input = new IsolatedArchiveInput($path);
         $arguments = $this->command('x', $input->path(), $type);
         $arguments[] = $entry['originalName'];
-        return ProcessStream::open($arguments, $password, $this->maxExpandedBytes, $entry['size'], $entry['crc'], $input, $budget);
+        $limit = $this->mountLimits === null ? $this->maxExpandedBytes : min($this->maxExpandedBytes, MountArchiveLimits::MAX_MEMBER_BYTES);
+        return ProcessStream::open($arguments, $password, $limit, $entry['size'], $entry['crc'], $input, $budget);
     }
 
     /** @return resource Sequential TAR bytes; never materialized on disk. */
-    public function compressedTarStream(string $path, ?OperationBudget $budget = null) {
+    public function compressedTarStream(string $path, ?OperationBudget $budget = null, ?int $processedByteBudget = null) {
         $budget?->check();
         $handle = @fopen($path, 'rb');
         if ($handle === false) { throw new \RuntimeException('The archive is not readable.'); }
@@ -311,6 +315,7 @@ final class SevenZipReader {
         $type = str_starts_with($magic, 'BZh') ? 'bzip2' : (str_starts_with($magic, "\xFD7zXZ\x00") ? 'xz' : null);
         if ($type === null || !$this->supports($type, $budget)) { throw new \RuntimeException('This archive format requires system 7-Zip, util-linux and PHP proc_open.'); }
         $input = new IsolatedArchiveInput($path);
-        return ProcessStream::open($this->command('x', $input->path(), $type), null, $this->maxExpandedBytes + 33554432, input: $input, budget: $budget);
+        $limit = $processedByteBudget ?? (min($this->maxExpandedBytes, PHP_INT_MAX - self::TAR_STREAM_OVERHEAD) + self::TAR_STREAM_OVERHEAD);
+        return ProcessStream::open($this->command('x', $input->path(), $type), null, $limit, input: $input, budget: $budget);
     }
 }

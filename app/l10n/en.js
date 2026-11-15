@@ -339,5 +339,13 @@ OC.L10N.register("archive_tools", {
     "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.": "The ZIP extraction selection exceeds the size limit. Select fewer files or folders.",
     "The requested folder is not present in the ZIP archive.": "The requested folder is not present in the ZIP archive.",
     "Opening archive…": "Opening archive…",
-    "Loading archive folder…": "Loading archive folder…"
+    "Loading archive folder…": "Loading archive folder…",
+    "Maximum expanded size of connected archives (MiB)": "Maximum expanded size of connected archives (MiB)",
+    "This limit applies to the total uncompressed size when connecting a new archive.": "This limit applies to the total uncompressed size when connecting a new archive.",
+    "The expanded archive exceeds the {limit} MiB limit for new connections.": "The expanded archive exceeds the {limit} MiB limit for new connections.",
+    "An archive member exceeds the 4 GiB size limit for connections.": "An archive member exceeds the 4 GiB size limit for connections.",
+    "Invalid archive connection size limit.": "Invalid archive connection size limit.",
+    "The archive exceeds the expanded size limit for connections.": "The archive exceeds the expanded size limit for connections.",
+    "A file in the archive exceeds the maximum size for connected files.": "A file in the archive exceeds the maximum size for connected files.",
+    "The archive connection size limit must be a positive whole number in MiB that fits on this server.": "The archive connection size limit must be a positive whole number in MiB that fits on this server."
 }, "nplurals=2; plural=(n != 1);");
