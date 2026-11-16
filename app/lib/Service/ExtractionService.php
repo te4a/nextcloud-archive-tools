@@ -219,9 +219,8 @@ final class ExtractionService {
                     });
                     try {
                         $file = $folder->newFile(basename($member), $tracked);
-                        if ($fileRead !== (int)$entry['size'] || $file->getSize() !== (int)$entry['size']) { throw new \RuntimeException('The extracted file is incomplete.'); }
                     } catch (\Throwable $writeError) {
-                        // Nextcloud 35's resource-based View::file_put_contents()
+                        // Nextcloud 34 and 35's resource-based View::file_put_contents()
                         // leaves its file lock and ancestor read locks acquired if
                         // the input stream throws. Balance precisely that write;
                         // the enclosing destination-parent exclusive lock stays
@@ -239,6 +238,9 @@ final class ExtractionService {
                         }
                         throw $writeError;
                     } finally { if (is_resource($tracked)) { fclose($tracked); } }
+                    if ($fileRead !== (int)$entry['size'] || $file->getSize() !== (int)$entry['size']) {
+                        throw new \RuntimeException('The extracted file is incomplete.');
+                    }
                     $filesDone++;
                     $bytesDone += $fileRead;
                     $this->jobs->update($id, ['files_done' => $filesDone, 'bytes_done' => $bytesDone]);

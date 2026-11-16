@@ -54,8 +54,7 @@ and review are separate release concerns.
 | `ICache::searchQuery()`, `ICache::remove()`, `IUserMountCache::removeMount()` | `VirtualStorageCleanup` | Remove the cache data and user mount points recorded in the app's cache registry. New connections use distinct roots in one virtual storage. An upgrade preserves the cache location of each existing connection. |
 | `IFileAccess::getByFileId()` | `MountRepository` | Detect permanent source deletion by file ID. Access checks hide the connection while the source is in the recycle bin. |
 | `IMountPoint`, `IMovableMount`, `IStorageFactory` | `ArchiveMountPoint` | The archive mount implements the public interfaces and asks the core factory to apply its storage wrappers. Archive Tools supplies the lazy storage identity and maps each recipient's share path to the shared archive contents. |
-| `OC\Files\Cache\Wrapper\CacheWrapper` | `AccessCache` | Retain the native cache decorator for the stable root/storage identity, access checks, and compatibility with the native scanner. The scanner and storage base depend on methods beyond `ICache`. |
-| `OC\Files\Cache\FailedCache` | `AccessCache` | Retain the native inaccessible-cache behavior. Its denied root is a server-provided `ICacheEntry`, which Nextcloud marks `Consumable`. |
+| `OCP\Files\Cache\ICache` and `OCP\Files\Search` | `AccessCache` | Project the native cache through the public interfaces. Keep the storage and root IDs for mount registration, check access before exposing entries, and constrain searches to the connection's cache path. |
 | `OC\Files\Storage\Wrapper\Wrapper` | `ExtractionLockStorage` | Retain the native storage decorator so writes can use already reserved destination paths while preserving locks against other requests. |
 | `OC\Files\View` | `ExtractionService` | Retain the narrow interrupted-stream unlock compensation pending a verified public equivalent or an upstream fix; removing it can break rollback and leak file/ancestor locks. |
 | `OC_Util::setupFS/tearDownFS` | `ExtractJob` | Replaced with injected public `OCP\Files\ISetupManager`, available and marked consumable since 34.0.0. |
@@ -69,13 +68,14 @@ has the same relevant contract in
 and
 [35.0.0](https://github.com/nextcloud/server/blob/v35.0.0/lib/public/Files/ISetupManager.php).
 
-Public `Node::unlock()` can balance a file and its ancestor locks, but the failing
-`Folder::newFile(name, stream)` operation may throw before returning a file node.
-Creating an empty node first and then writing content would change create/write
-event timing and metadata behavior. That is not a drop-in compatibility change.
-`OCP\Files\Lock\ILockManager` addresses collaborative `files_lock`/DAV lock
-contexts; it is not a replacement for transactional `OCP\Lock\ILockingProvider`
-locks used here.
+Public `Node::unlock()` balances a file and its ancestor locks once the caller
+has a file node. `Folder::newFile(name, stream)` can throw before returning
+that node. Creating an empty node first changes create/write event timing and
+metadata behavior. Subsequent writes through `File::fopen()` also require update
+permission. Keep native streamed creation and compensate inside the write's
+exception handler. A size mismatch after the write returns goes directly to
+rollback. `OCP\Files\Lock\ILockManager` addresses collaborative DAV lock
+contexts. The extraction reservation uses transactional file locks.
 
 ## Questions for Nextcloud maintainers
 
@@ -83,10 +83,6 @@ locks used here.
   Archive Tools now removes virtual file metadata and mount projections through
   public APIs. The remaining permanent registration and obsolete beta registry
   records need a core API for removal.
-- Is there a supported cache decorator for a native storage whose access can
-  change during a request? It needs to preserve the storage/root identity,
-  hide cached member entries after access is lost, and work with the native
-  scanner and availability checks.
 - How should an app run a native `Folder::newFile(name, stream)` under an
   exclusive reservation on the destination while preserving other requests'
   locks? For stream or destination errors, the core operation needs to release
@@ -146,12 +142,7 @@ decoder concurrency remains governed by the PHP/server infrastructure.
 Release gates must run these checks on both declared major versions and preserve
 native PROPFIND/GET/Range behavior, shared recipient aliases, parent moves,
 immediate access revocation including cached listings, source-version
-preconditions, and lock cleanup after failed or interrupted writes. Residual
-concrete cache/storage/View dependencies remain an explicit maintenance
-boundary; successful compatibility tests do not turn them into public API.
-
-The architecture decision is **go for retaining documented native storage and
-shared WebDAV**, with a public setup-manager replacement and bounded compatibility
-tests. It is **not a claim of all-public implementation or App Store approval**.
-Any future removal of the remaining adapters must preserve the acceptance
-properties above before replacing the existing path.
+preconditions, and lock cleanup after failed or interrupted writes. The
+remaining transactional storage wrapper and interrupted-stream compensation
+depend on internal Nextcloud classes. Any replacement needs to preserve those
+lock and rollback guarantees.

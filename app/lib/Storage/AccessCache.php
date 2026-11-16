@@ -5,81 +5,199 @@ declare(strict_types=1);
 namespace OCA\ArchiveTools\Storage;
 
 use Closure;
-use OC\Files\Cache\FailedCache;
-use OC\Files\Cache\Wrapper\CacheWrapper;
 use OCP\Files\Cache\ICache;
 use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\Search\ISearchBinaryOperator;
 use OCP\Files\Search\ISearchComparison;
 use OCP\Files\Search\ISearchOperator;
+use OCP\Files\Search\ISearchQuery;
+use OCP\IUser;
 
-/**
- * Keep the scanner's cache reference stable while checking access for every
- * cache operation. A temporary failure during mount assembly must not replace
- * the real cache with a permanently captured FailedCache in that scanner.
- */
-final class AccessCache extends CacheWrapper {
+/** Present a connection's native cache in its mount-relative namespace. */
+final class AccessCache implements ICache {
     public function __construct(
-        ICache $cache,
+        private readonly ICache $cache,
         private readonly string $branch,
         private Closure $isAccessible,
         private Closure $readDirectory,
         private Closure $seedRoot,
-    ) {
-        parent::__construct($cache);
+    ) {}
+
+    public function getNumericStorageId(): int {
+        // Core memoizes the storage ID during mount assembly, before shares are ready.
+        return $this->cache->getNumericStorageId();
     }
 
-    public function getCache(): ICache {
-        return ($this->isAccessible)()
-            ? parent::getCache()
-            : new FailedCache(visible: false);
+    public function getId($file): int {
+        // Registration needs the root identity even when the viewer's source share
+        // is still assembling. Child IDs and all entry metadata remain gated.
+        if ($file === '') {
+            return ($this->seedRoot)($this->cache);
+        }
+        return ($this->isAccessible)() ? $this->cache->getId($this->nativePath((string)$file)) : -1;
     }
 
-    public function getNumericStorageId() {
-        // MountPoint memoizes this identity even when the value is -1. It
-        // must remain stable while access-dependent metadata stays gated.
-        return parent::getCache()->getNumericStorageId();
+    public function get($file): ICacheEntry|false {
+        if (!($this->isAccessible)()) {
+            return false;
+        }
+        $entry = $this->cache->get(is_int($file) ? $file : $this->nativePath((string)$file));
+        return $entry instanceof ICacheEntry ? $this->formatCacheEntry($entry) : false;
     }
 
-    public function getId($file) {
-        // Core registers a mount only when this root identity is known. It
-        // asks before the recipient's source share can be resolved, so gating
-        // this identity would discard an already indexed shared connection.
-        // Entry metadata, names, child IDs and all actual I/O remain gated.
-        return $file === ''
-            ? ($this->seedRoot)(parent::getCache())
-            : parent::getId($this->nativePath((string)$file));
+    public function getFolderContents(string $folder, ?string $mimeTypeFilter = null): array {
+        return $this->getFolderContentsById($this->getId($folder), $mimeTypeFilter);
     }
 
-    public function getFolderContentsById(int $fileId, ?string $mimeTypeFilter = null) {
+    public function getFolderContentsById(int $fileId, ?string $mimeTypeFilter = null): array {
         if ($this->getPathById($fileId) === null) {
             return [];
         }
-        return ($this->readDirectory)(fn (): array => parent::getFolderContentsById($fileId, $mimeTypeFilter));
+        return ($this->readDirectory)(fn (): array => ($this->isAccessible)()
+            ? $this->formatEntries($this->cache->getFolderContentsById($fileId, $mimeTypeFilter))
+            : []);
     }
 
-    public function get($file) {
-        return parent::get(is_int($file) ? $file : $this->nativePath((string)$file));
+    public function getParentId($file): int {
+        if ($file === '' || !($this->isAccessible)()) {
+            return -1;
+        }
+        return $this->cache->getParentId($this->nativePath((string)$file));
     }
 
-    public function getParentId($file) {
-        return $file === '' ? -1 : parent::getParentId($this->nativePath((string)$file));
+    public function inCache($file): bool {
+        return ($this->isAccessible)() && $this->cache->inCache($this->nativePath((string)$file));
     }
 
-    public function inCache($file) {
-        return parent::inCache($this->nativePath((string)$file));
+    public function getStatus($file): int {
+        return ($this->isAccessible)() ? $this->cache->getStatus($this->nativePath((string)$file)) : ICache::NOT_FOUND;
     }
 
-    public function getStatus($file) {
-        return parent::getStatus($this->nativePath((string)$file));
-    }
-
-    public function getPathById($id) {
-        $path = parent::getPathById($id);
+    public function getPathById($id): ?string {
+        if (!($this->isAccessible)()) {
+            return null;
+        }
+        $path = $this->cache->getPathById($id);
         return is_string($path) ? $this->relativePath($path) : null;
     }
 
-    protected function formatCacheEntry($entry) {
+    public function put($file, array $data): int {
+        $id = $this->getId($file);
+        if ($id > -1) {
+            $this->update($id, $data);
+            return $id;
+        }
+        return $this->insert($file, $data);
+    }
+
+    public function insert($file, array $data): int {
+        if ($file === '') {
+            $id = $this->getId('');
+            if ($id > 0) {
+                $this->update($id, $data);
+            }
+            return $id;
+        }
+        return ($this->isAccessible)()
+            ? $this->cache->insert($this->nativePath((string)$file), $this->entryData($data))
+            : -1;
+    }
+
+    public function update($id, array $data): void {
+        if ($this->getPathById($id) !== null) {
+            $this->cache->update($id, $this->entryData($data));
+        }
+    }
+
+    public function remove($file): void {
+        if (($this->isAccessible)()) {
+            $this->cache->remove($this->nativePath((string)$file));
+        }
+    }
+
+    public function move($source, $target): void {
+        throw new \LogicException('Archive connections are read-only.');
+    }
+
+    public function moveFromCache(ICache $sourceCache, $sourcePath, $targetPath): void {
+        throw new \LogicException('Archive connections are read-only.');
+    }
+
+    public function copyFromCache(ICache $sourceCache, ICacheEntry $sourceEntry, string $targetPath): int {
+        throw new \LogicException('Archive connections are read-only.');
+    }
+
+    public function getIncomplete(): string|false {
+        if (!($this->isAccessible)()) {
+            return false;
+        }
+        if ($this->branch === '') {
+            return $this->cache->getIncomplete();
+        }
+        return $this->cache->getStatus($this->branch) === ICache::SHALLOW ? '' : false;
+    }
+
+    public function normalize($path): string {
+        return $this->cache->normalize($path);
+    }
+
+    public function search($pattern): array {
+        return $this->searchQuery(new CacheSearchQuery(
+            new CacheSearchComparison(ISearchComparison::COMPARE_LIKE, 'name', (string)$pattern),
+        ));
+    }
+
+    public function searchByMime($mimetype): array {
+        $exact = str_contains($mimetype, '/');
+        return $this->searchQuery(new CacheSearchQuery(new CacheSearchComparison(
+            $exact ? ISearchComparison::COMPARE_EQUAL : ISearchComparison::COMPARE_LIKE,
+            'mimetype',
+            $exact ? $mimetype : $mimetype . '/%',
+        )));
+    }
+
+    public function searchQuery(ISearchQuery $query): array {
+        if (!($this->isAccessible)()) {
+            return [];
+        }
+        if ($this->branch !== '') {
+            $query = new CacheSearchQuery(new CacheSearchGroup(ISearchBinaryOperator::OPERATOR_AND, [
+                $query->getSearchOperation(),
+                $this->branchFilter(),
+            ]), $query);
+        }
+        return $this->formatEntries($this->cache->searchQuery($query));
+    }
+
+    public function getQueryFilterForStorage(): ISearchOperator {
+        if (!($this->isAccessible)()) {
+            return new CacheSearchComparison(ISearchComparison::COMPARE_EQUAL, 'storage', -1);
+        }
+        $storageFilter = $this->cache->getQueryFilterForStorage();
+        return $this->branch === '' ? $storageFilter
+            : new CacheSearchGroup(ISearchBinaryOperator::OPERATOR_AND, [$storageFilter, $this->branchFilter()]);
+    }
+
+    public function getCacheEntryFromSearchResult(ICacheEntry $rawEntry): ?ICacheEntry {
+        if (!($this->isAccessible)()) {
+            return null;
+        }
+        $entry = $this->cache->getCacheEntryFromSearchResult($rawEntry);
+        if ($entry === null) {
+            return null;
+        }
+        // Global search can project the same native entry through several caches.
+        return $this->branch === '' ? clone $entry : ($this->formatCacheEntry($entry) ?: null);
+    }
+
+    private function branchFilter(): ISearchOperator {
+        return new CacheSearchGroup(ISearchBinaryOperator::OPERATOR_OR, [
+            new CacheSearchComparison(ISearchComparison::COMPARE_EQUAL, 'path', $this->branch),
+            new CacheSearchComparison(ISearchComparison::COMPARE_LIKE_CASE_SENSITIVE, 'path', $this->branch . '/%'),
+        ]);
+    }
+
+    private function formatCacheEntry(ICacheEntry $entry): ICacheEntry|false {
         if ($this->branch === '') {
             return $entry;
         }
@@ -96,93 +214,11 @@ final class AccessCache extends CacheWrapper {
         return $entry;
     }
 
-    public function insert($file, array $data) {
-        if ($file === '') {
-            $id = $this->getId('');
-            if ($id > 0) {
-                $this->update($id, $data);
-            }
-            return $id;
-        }
-        return parent::insert($this->nativePath((string)$file), $this->entryData($data));
-    }
-
-    public function update($id, array $data) {
-        if ($this->getPathById($id) !== null) {
-            parent::update($id, $this->entryData($data));
-        }
-    }
-
-    public function remove($file) {
-        parent::remove($this->nativePath((string)$file));
-    }
-
-    public function clear() {
-        $this->remove('');
-    }
-
-    public function move($source, $target) {
-        throw new \LogicException('Archive connections are read-only.');
-    }
-
-    public function moveFromCache(ICache $sourceCache, $sourcePath, $targetPath) {
-        throw new \LogicException('Archive connections are read-only.');
-    }
-
-    public function copyFromCache(ICache $sourceCache, ICacheEntry $sourceEntry, string $targetPath): int {
-        throw new \LogicException('Archive connections are read-only.');
-    }
-
-    public function correctFolderSize(string $path, $data = null, bool $isBackgroundScan = false): void {
-        if ($this->branch === '') {
-            parent::correctFolderSize($path, $data, $isBackgroundScan);
-            return;
-        }
-        parent::calculateFolderSize($this->nativePath($path));
-    }
-
-    public function calculateFolderSize($path, $entry = null) {
-        return parent::calculateFolderSize($this->nativePath((string)$path), $this->branch === '' ? $entry : null);
-    }
-
-    public function getAll() {
-        return $this->branch === '' && ($this->isAccessible)() ? parent::getAll() : [];
-    }
-
-    public function getIncomplete() {
-        if ($this->branch === '') {
-            return parent::getIncomplete();
-        }
-        return $this->getStatus('') === ICache::SHALLOW ? '' : false;
-    }
-
-    public function getQueryFilterForStorage(): ISearchOperator {
-        if (!($this->isAccessible)()) {
-            return new CacheSearchComparison(ISearchComparison::COMPARE_EQUAL, 'storage', -1);
-        }
-        $storageFilter = parent::getCache()->getQueryFilterForStorage();
-        if ($this->branch === '') {
-            return $storageFilter;
-        }
-        return new CacheSearchGroup(ISearchBinaryOperator::OPERATOR_AND, [
-            $storageFilter,
-            new CacheSearchGroup(ISearchBinaryOperator::OPERATOR_OR, [
-                new CacheSearchComparison(ISearchComparison::COMPARE_EQUAL, 'path', $this->branch),
-                new CacheSearchComparison(ISearchComparison::COMPARE_LIKE_CASE_SENSITIVE, 'path', $this->branch . '/%'),
-            ]),
-        ]);
-    }
-
-    public function getCacheEntryFromSearchResult(ICacheEntry $rawEntry): ?ICacheEntry {
-        if (!($this->isAccessible)()) {
-            return null;
-        }
-        return parent::getCacheEntryFromSearchResult($rawEntry);
+    private function formatEntries(array $entries): array {
+        return array_filter(array_map($this->formatCacheEntry(...), $entries));
     }
 
     private function nativePath(string $path): string {
-        // Cache paths are normalized and relative. Preserve an empty alias for
-        // the connection root without exposing the common storage root.
         if ($this->branch === '') {
             return $path;
         }
@@ -201,11 +237,22 @@ final class AccessCache extends CacheWrapper {
     }
 
     private function entryData(array $data): array {
-        // Native cache assigns canonical identity and parent links from the
-        // stored path, never from the relative projection's metadata.
+        // Native cache assigns canonical identity and parent links from the stored path.
         unset($data['path'], $data['path_hash'], $data['name'], $data['parent'], $data['storage'], $data['storage_id']);
         return $data;
     }
+}
+
+/** @internal Supplies a scoped search operation without changing its paging or metadata options. */
+final class CacheSearchQuery implements ISearchQuery {
+    public function __construct(private readonly ISearchOperator $operation, private readonly ?ISearchQuery $original = null) {}
+    public function getSearchOperation(): ISearchOperator { return $this->operation; }
+    public function getLimit(): int { return $this->original?->getLimit() ?? 0; }
+    public function getOffset(): int { return $this->original?->getOffset() ?? 0; }
+    public function getOrder(): array { return $this->original?->getOrder() ?? []; }
+    public function getUser(): ?IUser { return $this->original?->getUser(); }
+    public function limitToHome(): bool { return $this->original?->limitToHome() ?? false; }
+    public function getSelectFields(): array { return $this->original?->getSelectFields() ?? []; }
 }
 
 /** @internal Minimal search operations over the public Nextcloud interfaces. */

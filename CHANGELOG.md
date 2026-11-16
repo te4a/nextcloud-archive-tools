@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0-beta.6
+
+- Use Nextcloud's public cache and search interfaces for archive connections. Keep WebDAV paths and file IDs stable and hide cached entries when access to the source is lost.
+- Roll back an extraction when the completed file has the wrong size without releasing locks that Nextcloud already released.
+
 ## 0.5.0-beta.5
 
 - Let administrators configure the maximum expanded size for new archive connections. The default is 4 GiB.

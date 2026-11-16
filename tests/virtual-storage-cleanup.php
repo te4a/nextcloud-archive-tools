@@ -15,6 +15,7 @@ use OCA\ArchiveTools\Service\LifecycleService;
 use OCA\ArchiveTools\Service\MetadataOnlyStorage;
 use OCA\ArchiveTools\Service\MountRepository;
 use OCA\ArchiveTools\Service\VirtualStorageCleanup;
+use OCA\ArchiveTools\Storage\AccessCache;
 use OCA\ArchiveTools\Storage\ArchiveStorage;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\Files\Cache\ICache;
@@ -215,6 +216,19 @@ try {
         sort($expectedIds);
         virtualCheck('native Files search returns the two independently mounted members',
             $searchIds === $expectedIds);
+        $native = virtualShared();
+        $scoped = new AccessCache($native, $first['path'], static fn (): bool => true,
+            static fn (callable $read): array => $read(), static fn (ICache $cache): int => $cache->getId($first['path']));
+        virtualCheck('scoped cache hides sibling branches for entry and path lookups by file ID',
+            $scoped->get($live['member']) === false && $scoped->getPathById($live['member']) === null
+            && $scoped->getFolderContentsById($live['root']) === []);
+        virtualCheck('scoped cache searches yield mount-relative files from only the selected connection',
+            array_map(static fn (ICacheEntry $entry): string => $entry->getPath(), $scoped->search('member%')) === ['nested/member.txt']
+            && array_map(static fn (ICacheEntry $entry): int => $entry->getId(), $scoped->searchByMime('text')) === [$first['member']]
+            && array_map(static fn (ICacheEntry $entry): int => $entry->getId(), $scoped->searchByMime('text/plain')) === [$first['member']]);
+        virtualCheck('scoped scanning retains the root size and member size',
+            $scoped->get('')->getSize() === strlen('Virtual cache fixture bytes.')
+            && $scoped->get('nested/member.txt')->getSize() === strlen('Virtual cache fixture bytes.'));
         virtualCheck('ordinary disconnect succeeds', $server->get(MountController::class)->destroy($first['id'])->getStatus() === 200);
         $cache = virtualShared();
         virtualCheck('disconnect removes only the selected archive branch and projections',
@@ -277,6 +291,19 @@ try {
                 $file->getId() === $case['member'] && $file->getContent() === 'Virtual cache fixture bytes.');
             virtualCheck('first access records a legacy numeric storage without reallocation',
                 (int)$repo->find($case['id'])['cache_numeric_id'] === $case['numeric']);
+            $legacy = (new MetadataOnlyStorage(['identity' => $case['identity']]))->getCache();
+            $readable = false;
+            $scoped = new AccessCache($legacy, '', static function () use (&$readable): bool { return $readable; },
+                static fn (callable $read): array => $read(), static fn (ICache $cache): int => $cache->getId(''));
+            virtualCheck('denied legacy cache only exposes identities needed to assemble the mount',
+                $scoped->getId('') === $case['root'] && $scoped->getNumericStorageId() === $case['numeric']
+                && $scoped->get('') === false && $scoped->get($case['member']) === false
+                && $scoped->getId('nested/member.txt') === -1 && $scoped->getPathById($case['member']) === null
+                && $scoped->getFolderContents('') === [] && $scoped->search('member%') === []);
+            $scoped->remove('');
+            $readable = true;
+            virtualCheck('the same legacy cache resumes native metadata when access becomes available',
+                $scoped->get('')->getId() === $case['root'] && $scoped->get($case['member'])->getPath() === 'nested/member.txt');
             virtualCheck('explicit legacy disconnect clears that metadata and exact projections',
                 $server->get(MountController::class)->destroy($case['id'])->getStatus() === 200
                 && virtualStorageRows($case['numeric']) === 0 && virtualMountRows($case['root']) === 0
