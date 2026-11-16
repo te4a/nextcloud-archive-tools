@@ -15,6 +15,7 @@ use OCA\ArchiveTools\Service\SettingsService;
 use OCA\ArchiveTools\Service\LifecycleService;
 use OCA\ArchiveTools\Service\AdmissionService;
 use OCA\ArchiveTools\Service\ResourceLimitException;
+use OCA\ArchiveTools\Storage\ArchiveStorage;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
@@ -65,11 +66,10 @@ final class MountController extends Controller {
         throw new NotFoundException('File not found.');
     }
 
-    private function safeRow(array $row): array {
+    private function safeRow(array $row, ?\OCP\Files\Node $parent = null, ?\OCP\Files\Node $source = null): array {
         $info = json_decode($row['index_json'], true, 512, JSON_THROW_ON_ERROR);
-        $parent = $this->nodeById((int)$row['parent_id']);
-        $source = $this->nodeById((int)$row['source_id']);
-        $relativeParent = $this->userFolder()->getRelativePath($parent->getPath());
+        $parent ??= $this->nodeById((int)$row['parent_id']);
+        $source ??= $this->nodeById((int)$row['source_id']);
         $available = $source instanceof File
             && $source->getParent()->getId() === (int)$row['parent_id']
             && hash_equals((string)$row['source_etag'], $source->getEtag());
@@ -80,13 +80,25 @@ final class MountController extends Controller {
             'lastAccess' => (int)$row['last_access'],
             'fileCount' => $info['fileCount'], 'totalSize' => $info['totalSize'],
             'encrypted' => (bool)($info['encrypted'] ?? false),
-            'path' => ltrim(rtrim((string)$relativeParent, '/') . '/' . $row['mount_name'], '/'),
+            'path' => $this->mountPath($row, $parent),
             'sourceName' => $source->getName(),
             'sourcePath' => $this->userFolder()->getRelativePath($source->getPath()),
             'canManage' => $this->canManage($parent, $source),
             'available' => $available,
             'state' => $available ? 'ready' : 'source_changed',
         ];
+    }
+
+    private function mountPath(array $row, \OCP\Files\Node $parent): string {
+        $relativeParent = $this->userFolder()->getRelativePath($parent->getPath());
+        return ltrim(rtrim((string)$relativeParent, '/') . '/' . $row['mount_name'], '/');
+    }
+
+    private function canDisconnectUnavailable(\OCP\Files\Node $parent): bool {
+        $user = $this->userSession->getUser();
+        return $user !== null && $parent instanceof Folder && $parent->isCreatable()
+            && (bool)($parent->getPermissions() & \OCP\Constants::PERMISSION_UPDATE)
+            && $parent->getOwner()?->getUID() === $user->getUID();
     }
 
     private function canManage(\OCP\Files\Node $parent, \OCP\Files\Node $source): bool {
@@ -102,15 +114,31 @@ final class MountController extends Controller {
         $result = [];
         foreach ($this->mounts->findAll() as $row) {
             try {
-                $this->nodeById((int)$row['parent_id']);
-                $this->nodeById((int)$row['source_id']);
-                // Load the index only for a connection this viewer can access.
-                $current = $this->mounts->find((int)$row['id']);
-                if ($current !== null) {
-                    $result[] = $this->safeRow($current);
-                }
+                $parent = $this->nodeById((int)$row['parent_id']);
             } catch (NotFoundException) {
-                // Do not disclose another user's archive or its file names.
+                continue;
+            }
+            try {
+                $source = $this->nodeById((int)$row['source_id']);
+            } catch (NotFoundException) {
+                if ($this->canDisconnectUnavailable($parent)) {
+                    $result[] = [
+                        'id' => (int)$row['id'], 'parentId' => (int)$row['parent_id'],
+                        'name' => $row['mount_name'], 'pinned' => (bool)$row['pinned'],
+                        'path' => $this->mountPath($row, $parent),
+                        'canManage' => true, 'available' => false, 'state' => 'source_unavailable',
+                    ];
+                }
+                continue;
+            }
+            // Load the index only for a connection this viewer can access.
+            $current = $this->mounts->find((int)$row['id']);
+            if ($current !== null) {
+                try {
+                    $result[] = $this->safeRow($current, $parent, $source);
+                } catch (NotFoundException) {
+                    // The source or its parent changed while the list was being built.
+                }
             }
         }
         return new JSONResponse($result);
@@ -181,7 +209,7 @@ final class MountController extends Controller {
             }
             $indexJson = json_encode($index, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
             $encryptedPassword = $password === null ? null : $this->crypto->encrypt($password);
-            return $this->lifecycle->write(function () use ($source, $parent, $owner, $name, $pinned, $sourceEtag, $indexJson, $encryptedPassword): JSONResponse {
+            return $this->lifecycle->write(function () use ($source, $parent, $owner, $name, $pinned, $sourceEtag, $index, $indexJson, $encryptedPassword): JSONResponse {
             $this->admission->assertConnection($owner, $indexJson, $encryptedPassword);
             $id = $this->mounts->create([
                 'source_id' => $source->getId(), 'parent_id' => $parent->getId(),
@@ -191,6 +219,12 @@ final class MountController extends Controller {
                 'index_json' => $indexJson,
                 'password' => $encryptedPassword,
             ]);
+            $branch = ArchiveStorage::branch($id);
+            foreach ($index['entries'] as $member => $_entry) {
+                if (!ArchiveStorage::fitsCachePath($branch, (string)$member)) {
+                    throw new \InvalidArgumentException('An archive member path is too long to connect this archive. Open the archive to browse its contents.');
+                }
+            }
             try {
                 $initializationLease = $this->mounts->beginReadLease($id);
                 try {
@@ -290,20 +324,31 @@ final class MountController extends Controller {
     }
 
     private function destroyReady(int $id): JSONResponse {
-        $row = $this->mounts->find($id);
-        if ($row === null) {
-            return new JSONResponse(['message' => $this->l->t('Connection not found.')], 404);
-        }
         try {
-            $parent = $this->nodeById((int)$row['parent_id']);
-            // Shared root DELETE also means "remove this share for myself";
-            // it does not authorize deleting a connection for every recipient.
-            $source = $this->nodeById((int)$row['source_id']);
-            if (!$this->canManage($parent, $source)) {
-                return new JSONResponse(['message' => $this->l->t('You cannot disconnect this shared archive.')], 403);
+            $result = $this->mounts->withExclusive($id, function () use ($id): int|JSONResponse {
+                $row = $this->mounts->find($id);
+                if ($row === null) {
+                    throw new NotFoundException('Connection not found.');
+                }
+                $parent = $this->nodeById((int)$row['parent_id']);
+                try {
+                    $source = $this->nodeById((int)$row['source_id']);
+                } catch (NotFoundException $error) {
+                    if (!$this->canDisconnectUnavailable($parent)) {
+                        throw $error;
+                    }
+                    $source = null;
+                }
+                if ($source !== null && !$this->canManage($parent, $source)) {
+                    return new JSONResponse(['message' => $this->l->t('You cannot disconnect this shared archive.')], 403);
+                }
+                $this->mounts->delete($id);
+                return (int)$row['parent_id'];
+            });
+            if ($result instanceof JSONResponse) {
+                return $result;
             }
-            $this->mounts->delete($id);
-            $this->invalidator->invalidate((int)$row['parent_id'], $this->userSession->getUser());
+            $this->invalidator->invalidate($result, $this->userSession->getUser());
             return new JSONResponse(['disconnected' => true]);
         } catch (NotFoundException) {
             return new JSONResponse(['message' => $this->l->t('Connection not found.')], 404);

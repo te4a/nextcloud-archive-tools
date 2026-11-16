@@ -36,22 +36,33 @@ export interface ZipFolderInfo extends ArchiveInfo {
   entries: ZipArchiveEntry[]
 }
 
-export interface Mount {
+interface MountSummary {
   id: number
-  sourceId: number
   parentId: number
   name: string
   path?: string
-  sourceName?: string
-  available?: boolean
-  state?: 'ready' | 'source_changed'
-  createdBy: string
   pinned: boolean
   canManage?: boolean
-  lastAccess: number
-  fileCount: number
-  totalSize: number
 }
+
+export type Mount = MountSummary & (
+  | {
+      state?: 'ready' | 'source_changed'
+      available?: boolean
+      sourceId: number
+      sourceName?: string
+      sourcePath?: string
+      createdBy: string
+      lastAccess: number
+      fileCount: number
+      totalSize: number
+    }
+  | {
+      state: 'source_unavailable'
+      available: false
+      canManage: true
+    }
+)
 
 export interface Job {
   id: number

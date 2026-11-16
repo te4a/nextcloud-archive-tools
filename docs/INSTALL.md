@@ -109,7 +109,11 @@ php occ archive_tools:clear-history --owner USER_ID --output=json
 
 Review the row count, stored bytes and number of output references. Add repeated `--id TASK_ID` options to select specific records; add `--execute` to forget the selected terminal metadata. Each invocation handles at most 200 records. Queued/running jobs, other owners, notifications, source archives and extracted files are preserved. Forgotten records lose their retry selections and output references in Archive Tools history.
 
-Disconnecting an archive removes its own virtual file-cache records. Cron also recovers older orphaned virtual caches in bounded passes, checking exact storage identities, current connections and active read leases. This recovery does not delete source archives or extracted files.
+New connections have separate cache roots inside one virtual storage. Disconnecting an archive removes its file-cache records and user mount points. Cron checks the app's cache reservations and active read leases before cleaning up orphaned roots in bounded passes. Discovery costs depend on the recorded connections and can skip all member records inside live archives.
+
+On upgrade from beta.4, existing connections keep their original cache locations, including their virtual file IDs and any supported long member paths. Disconnecting those archives clears their known cache metadata and mount points. Nextcloud's public APIs retain empty storage registrations and cannot identify legacy orphan caches that have lost their connection records and mount projections.
+
+The compact cache path includes an internal directory for each new connection. An archive whose member path would exceed Nextcloud's 4,000-character cache field can still be opened in the archive viewer. Browsing and extraction have separate limits.
 
 ## Disable and remove
 
@@ -117,7 +121,7 @@ Disconnecting an archive removes its own virtual file-cache records. Cron also r
 
 Nextcloud 34 uses the same app uninstall repair hook during an ordinary disable. Archive Tools therefore keeps destructive metadata cleanup out of that hook. The candidate provides an explicit `archive_tools:purge` workflow; use its report and help output before requesting cleanup. Its destructive operation is allowed only after active work is quiescent and the lifecycle barrier is held.
 
-A completed purge removes application metadata and credentials and disables the app, while preserving user files. The standard app removal command or deployment then removes the code. Keep the corresponding backup if a downgrade or recovery is required; restore configuration, database and data together.
+A completed purge removes application metadata and credentials and disables the app, while preserving user files. The standard app removal command or deployment then removes the code. Empty virtual storage registrations remain in Nextcloud. Keep the corresponding backup if a downgrade or recovery is required. Restore configuration, database and data together.
 
 Inspect the cleanup plan first, while the app is still enabled:
 

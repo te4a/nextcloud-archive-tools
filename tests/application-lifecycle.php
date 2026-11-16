@@ -5,7 +5,13 @@ declare(strict_types=1);
 if (PHP_SAPI !== 'cli' || !preg_match('/^[a-f0-9]{32}$/D', (string)getenv('ARCHIVE_TOOLS_LIFECYCLE_FIXTURE'))) { exit(2); }
 define('OC_CONSOLE', true);
 require '/var/www/html/lib/base.php';
-\OC_App::registerAutoloading('archive_tools', '/var/www/html/custom_apps/archive_tools');
+spl_autoload_register(static function (string $class): void {
+    $prefix = 'OCA\\ArchiveTools\\';
+    if (str_starts_with($class, $prefix)) {
+        $file = '/var/www/html/custom_apps/archive_tools/lib/' . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php';
+        if (is_file($file)) { require_once $file; }
+    }
+});
 \OC_App::loadApps();
 $server = \OC::$server;
 $config = $server->get(\OCP\IConfig::class);
@@ -108,11 +114,15 @@ try {
         $server->get(\OCA\ArchiveTools\Service\NotificationService::class)->jobFinished('fixture_admin', $terminalId, 'source.zip', 'failed', $output->getId());
         $foreignArguments = ['lifecycleFixture' => (string)getenv('ARCHIVE_TOOLS_LIFECYCLE_FIXTURE')];
         $queue->add(\OC\Log\Rotate::class, $foreignArguments);
-        $orphan = lifecycleMetadataStorage('archive_tools:2147483646:' . str_repeat('a', 24))->getCache();
-        $orphan->put('', ['mimetype' => 'httpd/unix-directory', 'size' => 0, 'mtime' => 1, 'etag' => 'fixture-root', 'permissions' => 1]);
-        $orphanFile = $orphan->put('orphan.txt', ['mimetype' => 'text/plain', 'size' => 1, 'mtime' => 1, 'etag' => 'fixture-file', 'permissions' => 1]);
-        $foreign = lifecycleMetadataStorage('archive_tools:not-an-owned-storage')->getCache();
-        $foreign->put('', ['mimetype' => 'httpd/unix-directory', 'size' => 0, 'mtime' => 1, 'etag' => 'foreign', 'permissions' => 1]);
+        $orphan = lifecycleMetadataStorage(\OCA\ArchiveTools\Storage\ArchiveStorage::STORAGE_ID)->getCache();
+        $orphanPath = \OCA\ArchiveTools\Storage\ArchiveStorage::branch(2147483646);
+        $mounts->reserveCache(2147483646, \OCA\ArchiveTools\Storage\ArchiveStorage::STORAGE_ID, $orphanPath);
+        $orphan->put($orphanPath, ['mimetype' => 'httpd/unix-directory', 'size' => 0, 'mtime' => 1, 'etag' => 'fixture-root', 'permissions' => 1]);
+        $orphanFile = $orphan->put($orphanPath . '/orphan.txt', ['mimetype' => 'text/plain', 'size' => 1, 'mtime' => 1, 'etag' => 'fixture-file', 'permissions' => 1]);
+        $foreign = (new class(['datadir' => sys_get_temp_dir()]) extends \OC\Files\Storage\Local {
+            public function getId(): string { return 'archive_tools:not-an-owned-storage'; }
+        })->getCache();
+        $foreignRoot = $foreign->put('', ['mimetype' => 'httpd/unix-directory', 'size' => 0, 'mtime' => 1, 'etag' => 'foreign', 'permissions' => 1]);
         $expiredInput = '/tmp/archive-tools-input-' . bin2hex(random_bytes(16));
         $freshInput = '/tmp/archive-tools-input-' . bin2hex(random_bytes(16));
         foreach ([$expiredInput, $freshInput] as $directory) {
@@ -127,8 +137,7 @@ try {
         $fixture = ['sourceId' => $source->getId(), 'sourceSha256' => hash('sha256', $source->getContent()),
             'outputFileId' => $outputFile->getId(), 'mountId' => $mountId, 'queuedId' => $queued['id'],
             'terminalId' => $terminalId, 'terminalUpdated' => $terminal['updated_at'],
-            'orphanStorageId' => $orphan->getNumericStorageId(), 'orphanFileId' => $orphanFile,
-            'foreignStorageId' => $foreign->getNumericStorageId(), 'foreignArguments' => $foreignArguments,
+            'orphanFileId' => $orphanFile, 'foreignRoot' => $foreignRoot, 'foreignArguments' => $foreignArguments,
             'expiredInput' => $expiredInput, 'freshInput' => $freshInput, 'expiredNames' => $expiredNames, 'freshNames' => $freshNames];
         file_put_contents($manifestPath, json_encode($fixture, JSON_THROW_ON_ERROR)); chmod($manifestPath, 0600);
         lifecycleCheck('dry-run report counts protected credentials without exposing their values', $cleanup->report()['protectedConnections'] === 1 && $cleanup->report()['protectedTasks'] === 2);
@@ -202,12 +211,10 @@ try {
         lifecycleCheck('explicit purge leaves a durable nonsecret tombstone', $lifecycle->state() === 'purged');
         $report = $cleanup->report();
         lifecycleCheck('explicit purge deletes connection credentials task plans and lease rows', $report['connections'] === 0 && $report['tasks'] === 0 && $report['activeStreams'] === 0);
-        lifecycleCheck('explicit purge removes only strict app-owned virtual storages', $report['virtualStorages'] === 0);
-        foreach ([$fixture['orphanStorageId'], $fixture['foreignStorageId']] as $id) {
-            $qb = $db->getQueryBuilder();
-            $exists = $qb->select('numeric_id')->from('storages')->where($qb->expr()->eq('numeric_id', $qb->createNamedParameter($id)))->executeQuery()->fetchOne() !== false;
-            lifecycleCheck($id === $fixture['orphanStorageId'] ? 'orphan app cache storage is removed' : 'unrelated similar-prefix storage is preserved', $exists === ($id === $fixture['foreignStorageId']));
-        }
+        lifecycleCheck('explicit purge removes app-owned virtual archive roots', $report['virtualStorages'] === 0);
+        $fileAccess = $server->get(\OCP\Files\Cache\IFileAccess::class);
+        lifecycleCheck('orphan app file metadata is removed', $fileAccess->getByFileId($fixture['orphanFileId']) === null);
+        lifecycleCheck('unrelated similar-prefix cache root is preserved', $fileAccess->getByFileId($fixture['foreignRoot']) !== null);
         lifecycleCheck('native extraction and cleanup queue registrations are removed', !$queue->has(ExtractJob::class, ['jobId' => $fixture['queuedId']]) && !$queue->has(CleanupJob::class, null));
         lifecycleCheck('unrelated native background job is preserved', $queue->has(\OC\Log\Rotate::class, $fixture['foreignArguments']));
         lifecycleCheck('purge deletes administrator settings and installed version', $server->get(\OCP\IAppConfig::class)->getValueString(Application::APP_ID, 'installed_version', '') === '' && $server->get(SettingsService::class)->getSettings()['idleTimeoutMinutes'] === 60);

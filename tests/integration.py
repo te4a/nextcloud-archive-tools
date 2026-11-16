@@ -366,7 +366,8 @@ def check_mount_size_limit(admin: Client, alice: Client, settings: dict, report:
                  and {entry["path"] for entry in listing["entries"]} == {"first.txt", "second.txt"})
 
     status, equal = alice.api("POST", "/mounts", {"sourceId": source_ids["equal"], "name": "Exactly 1 MiB", "pinned": False})
-    report.check("a mount exactly at the aggregate limit succeeds", status == 201 and isinstance(equal, dict), "HTTP " + str(status))
+    report.check("a mount exactly at the aggregate limit succeeds", status == 201 and isinstance(equal, dict),
+                 "HTTP " + str(status) + " " + str(equal.get("message", "") if isinstance(equal, dict) else ""))
     report.check("source member is readable at the exact limit",
                  alice.dav("GET", folder + "/Exactly 1 MiB/first.txt") == (200, first_member))
     report.check("exact-limit fixture connection is removed", alice.api("DELETE", f'/mounts/{equal["id"]}')[0] == 200)
@@ -381,6 +382,24 @@ def check_mount_size_limit(admin: Client, alice: Client, settings: dict, report:
     report.check("lowering the limit leaves the existing connection readable through WebDAV",
                  alice.dav("GET", folder + "/" + over["name"] + "/second.txt") == (200, b"B" * (MEBIBYTE // 2) + b"x"))
     report.check("over-limit fixture connection is removed", alice.api("DELETE", f'/mounts/{connected["id"]}')[0] == 200)
+
+    # The members have valid archive-relative paths, but the virtual cache
+    # must also fit its per-connection directory into Nextcloud's path field.
+    long_path = "/".join(["a" * 249] * 15 + ["b" * 249])
+    with io.BytesIO() as output:
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(long_path, b"Deep path")
+        long_archive = output.getvalue()
+    source_path = folder + "/long-path.zip"
+    report.check("upload ZIP with a valid 3999-character member path",
+                 alice.dav("PUT", source_path, data=long_archive)[0] == 201)
+    status, result = alice.api("POST", "/mounts", {
+        "sourceId": alice.file_id(source_path), "name": "Long path test"})
+    report.check("an archive path exceeding the native cache field is rejected explicitly",
+                 status == 422 and "path is too long" in result.get("message", ""), "HTTP " + str(status))
+    report.check("a rejected long path leaves neither a mount nor changes to the source",
+                 alice.api("GET", "/mounts") == (200, [])
+                 and alice.dav("GET", source_path) == (200, long_archive))
 
 
 def run_tests(args: argparse.Namespace, report: Report) -> None:
@@ -544,6 +563,35 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         status, content = carol.dav("GET", "Team/" + mount_name + "/readme.txt")
         report.check("revocation preserves other participants' access", status == 200 and content == files["readme.txt"])
 
+        second_folder = "Second Team"
+        second_body = b"Different contents under the same member name.\n"
+        with io.BytesIO() as buffer:
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zipped:
+                zipped.writestr("readme.txt", second_body)
+            second_archive = buffer.getvalue()
+        report.check("owner creates another shared parent for the second archive",
+                     alice.dav("MKCOL", second_folder)[0] == 201)
+        report.check("owner uploads a second archive with the same member name",
+                     alice.dav("PUT", second_folder + "/fixture.zip", data=second_archive)[0] == 201)
+        alice.ocs("POST", payload={"path": "/" + second_folder, "shareType": 0,
+                                 "shareWith": carol.user, "permissions": 1})
+        status, second = alice.api("POST", "/mounts", {
+            "sourceId": alice.file_id(second_folder + "/fixture.zip"), "name": mount_name})
+        report.check("owner connects the second archive while the first remains connected", status == 201)
+        second_root = second_folder + "/" + mount_name
+        second_path = second_root + "/readme.txt"
+        first_path = "Team/" + mount_name + "/readme.txt"
+        second_ids = (alice.file_id(second_root), alice.file_id(second_path))
+        report.check("two connections expose distinct root and member identities",
+                     second_ids[0] != connection_ids[0] and second_ids[1] != alice.file_id(first_path))
+        report.check("recipient sees exact roots and file identities for the second connection",
+                     (carol.file_id(second_root), carol.file_id(second_path)) == second_ids)
+        report.check("recipient reads different bytes from the same member name in both connections",
+                     carol.dav("GET", first_path) == (200, files["readme.txt"])
+                     and carol.dav("GET", second_path) == (200, second_body))
+        report.check("access to one shared archive does not grant access to the second",
+                     mallory.dav("GET", second_path)[0] in (403, 404))
+
         status, _ = alice.api("DELETE", "/mounts/" + str(mount_id))
         report.check("folder owner can disconnect the shared connection", status == 200)
         mount_id = None
@@ -551,6 +599,11 @@ def run_tests(args: argparse.Namespace, report: Report) -> None:
         report.check("disconnection removes virtual contents for recipients", status == 404)
         status, source = alice.dav("GET", "Team/fixture.zip")
         report.check("disconnection preserves the original archive bytes", status == 200 and source == archive)
+        report.check("disconnecting the first archive preserves the second archive and its file IDs",
+                     carol.dav("GET", second_path) == (200, second_body)
+                     and (carol.file_id(second_root), carol.file_id(second_path)) == second_ids)
+        report.check("owner can disconnect the second shared archive independently",
+                     alice.api("DELETE", "/mounts/" + str(second["id"]))[0] == 200)
 
         fixture_group = "at_" + report.data["runId"] + "_readers"
         docker.group("group:add", fixture_group)

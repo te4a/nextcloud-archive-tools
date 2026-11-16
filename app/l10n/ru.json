@@ -352,7 +352,16 @@
         "Invalid archive connection size limit.": "Недопустимый лимит размера при подключении архива.",
         "The archive exceeds the expanded size limit for connections.": "Размер архива после распаковки превышает лимит для подключений.",
         "A file in the archive exceeds the maximum size for connected files.": "Размер файла внутри архива превышает допустимый предел для подключений.",
-        "The archive connection size limit must be a positive whole number in MiB that fits on this server.": "Укажите максимально допустимый размер подключаемого архива целым числом МиБ, больше нуля и в пределах возможностей сервера."
+        "The archive connection size limit must be a positive whole number in MiB that fits on this server.": "Укажите максимально допустимый размер подключаемого архива целым числом МиБ, больше нуля и в пределах возможностей сервера.",
+        "An archive member path is too long to connect this archive.": "Архив нельзя подключить из-за слишком длинного пути к одному из файлов.",
+        "Archive connections are read-only.": "Подключённые архивы доступны только для чтения.",
+        "Archive disconnected.": "Архив отключён.",
+        "Disconnect “{name}” for all participants?": "Отключить «{name}» для всех участников?",
+        "Source unavailable": "Исходный архив недоступен",
+        "An archive member path is too long to connect this archive. Open the archive to browse its contents.": "Архив нельзя подключить из-за слишком длинного пути к одному из файлов. Откройте архив для просмотра его содержимого.",
+        "Invalid archive cache location.": "Некорректное расположение кэша архива.",
+        "Invalid shared archive cache path.": "Некорректный путь в общем кэше архивов.",
+        "The legacy archive cache identity changed during cleanup.": "Идентификатор старого кэша архива изменился во время очистки."
     },
     "pluralForm": "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);"
 }

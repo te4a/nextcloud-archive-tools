@@ -10,6 +10,7 @@ use OCA\ArchiveTools\Archive\ArchiveReader;
 use OCA\ArchiveTools\Service\MountRepository;
 use OCA\ArchiveTools\Service\LifecycleService;
 use OCA\ArchiveTools\Service\LifecycleLease;
+use OCA\ArchiveTools\Service\MetadataOnlyStorage;
 use OCP\Constants;
 use OCP\Files\Cache\ICache;
 use OCP\Files\File;
@@ -20,11 +21,16 @@ use OCP\Files\Storage\IStorage;
 use OCP\Files\StorageNotAvailableException;
 use OCP\Security\ICrypto;
 use OCP\Lock\ILockingProvider;
+use OCP\Lock\LockedException;
 use OCP\IRequest;
 use OCP\Server;
 
 /** Read-only archive storage; its filecache never adds bytes to home storage. */
 final class ArchiveStorage extends Common {
+    public const STORAGE_ID = 'archive_tools::mounts';
+
+    private readonly string $cacheIdentity;
+    private readonly string $branch;
     private array $mount;
     private string $viewer;
     private MountRepository $repository;
@@ -45,6 +51,19 @@ final class ArchiveStorage extends Common {
     public function __construct(array $parameters) {
         parent::__construct($parameters);
         $this->mount = $parameters['mount'];
+        $id = (int)$this->mount['id'];
+        $etag = (string)$this->mount['source_etag'];
+        $identity = $this->mount['cache_identity'] ?? null;
+        $branch = $this->mount['cache_path'] ?? null;
+        if ($id < 1 || !is_string($identity) || !is_string($branch) || (
+            $identity === self::STORAGE_ID
+                ? !in_array($branch, [self::branch($id), self::previousBranch($id, $etag)], true)
+                : $branch !== '' || $identity !== MetadataOnlyStorage::legacyIdentity($id, $etag)
+        )) {
+            throw new \RuntimeException('The archive connection changed.');
+        }
+        $this->cacheIdentity = $identity;
+        $this->branch = $branch;
         $this->viewer = $parameters['viewer'];
         $this->repository = $parameters['repository'];
         $this->rootFolder = $parameters['rootFolder'];
@@ -57,9 +76,29 @@ final class ArchiveStorage extends Common {
     }
 
     public function getId(): string {
-        // Stable for all recipients, distinct when the indexed source changes.
-        return 'archive_tools:' . (int)$this->mount['id'] . ':'
-            . substr(hash('sha256', (string)$this->mount['source_etag']), 0, 24);
+        return $this->cacheIdentity;
+    }
+
+    public static function branch(int $connectionId): string {
+        return 'c' . $connectionId;
+    }
+
+    public static function previousBranch(int $connectionId, string $etag): string {
+        return 'conn-' . $connectionId . '-' . substr(hash('sha256', $etag), 0, 24);
+    }
+
+    public static function parseBranch(string $branch): ?int {
+        if (preg_match('/\A(?:c([1-9][0-9]*)|conn-([1-9][0-9]*)-[a-f0-9]{24})\z/', $branch, $match) !== 1) {
+            return null;
+        }
+        $decimal = $match[1] !== '' ? $match[1] : $match[2];
+        $id = (int)$decimal;
+        return (string)$id === $decimal ? $id : null;
+    }
+
+    public static function fitsCachePath(string $branch, string $path): bool {
+        $prefixLength = $branch === '' ? 0 : strlen($branch) + 1;
+        return $prefixLength + mb_strlen($path, 'UTF-8') <= 4000;
     }
 
     /** Gate cached listings too: checking only fopen() would disclose stale names. */
@@ -71,6 +110,7 @@ final class ArchiveStorage extends Common {
         $key = spl_object_id($cache);
         return $this->accessCaches[$key] ??= new AccessCache(
             $cache,
+            $this->branch,
             fn (): bool => $this->available(),
             function (callable $read): array {
                 return $this->repository->withShared((int)$this->mount['id'], function () use ($read): array {
@@ -81,7 +121,84 @@ final class ArchiveStorage extends Common {
                     return $result;
                 });
             },
+            $this->seedCacheRoot(...),
         );
+    }
+
+    private function seedCacheRoot(ICache $cache): int {
+        $rootId = $cache->getId($this->branch);
+        $numeric = $this->branch === '' ? $cache->getNumericStorageId() : null;
+        $knownNumeric = $numeric === null || (int)($this->mount['cache_numeric_id'] ?? 0) === $numeric;
+        if ($rootId > 0 && $knownNumeric) {
+            return $rootId;
+        }
+        $id = (int)$this->mount['id'];
+        try {
+            return $this->repository->withShared($id, function () use ($cache, $id, $numeric): int {
+                $current = $this->repository->find($id);
+                if (!$this->isCurrentMount($current)) {
+                    return -1;
+                }
+                $rootId = $cache->getId($this->branch);
+                if ($rootId < 1) {
+                    $locks = Server::get(ILockingProvider::class);
+                    $key = 'archive-tools/cache-branch/' . sha1($this->cacheIdentity . '/' . $this->branch);
+                    $locks->acquireLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+                    try {
+                        $rootId = $cache->getId($this->branch);
+                        if ($rootId < 1) {
+                            if ($this->branch !== '' && $cache->getId('') < 1) {
+                                $this->seedSharedAnchor($cache, $locks);
+                            }
+                            $rootId = $cache->put($this->branch, $this->newRootMetadata($this->branch ?: $this->cacheIdentity));
+                        }
+                    } finally {
+                        $locks->releaseLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+                    }
+                }
+                if ($rootId > 0 && $numeric !== null && $numeric > 0) {
+                    if ((int)($current['cache_numeric_id'] ?? 0) !== $numeric) {
+                        $this->repository->rememberCacheStorage($id, $numeric);
+                    }
+                    $this->mount['cache_numeric_id'] = $numeric;
+                }
+                return $rootId;
+            });
+        } catch (LockedException) {
+            // Another request is initializing or removing this projection.
+            return $knownNumeric ? $cache->getId($this->branch) : -1;
+        } catch (\RuntimeException $error) {
+            if ($this->repository->find($id) === null) {
+                return -1;
+            }
+            throw $error;
+        }
+    }
+
+    private function seedSharedAnchor(ICache $cache, ILockingProvider $locks): void {
+        $key = 'archive-tools/cache-root';
+        $locks->acquireLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+        try {
+            if ($cache->getId('') < 1) {
+                $cache->put('', $this->newRootMetadata(self::STORAGE_ID));
+            }
+        } finally {
+            $locks->releaseLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+        }
+    }
+
+    private function newRootMetadata(string $identity): array {
+        return ['mimetype' => 'httpd/unix-directory', 'size' => -1, 'mtime' => 0,
+            'permissions' => Constants::PERMISSION_READ, 'etag' => sha1($identity)];
+    }
+
+    private function isCurrentMount(?array $current): bool {
+        return $current !== null
+            && (int)$current['source_id'] === (int)$this->mount['source_id']
+            && (int)$current['parent_id'] === (int)$this->mount['parent_id']
+            && $current['cache_identity'] === $this->cacheIdentity
+            && $current['cache_path'] === $this->branch
+            && hash_equals((string)$this->mount['source_etag'], (string)$current['source_etag']);
     }
 
     public function test(): bool {
@@ -146,6 +263,22 @@ final class ArchiveStorage extends Common {
         return (string)$this->mount['created_by'];
     }
 
+    public function acquireLock(string $path, int $type, ILockingProvider $provider): void {
+        parent::acquireLock($this->lockPath($path), $type, $provider);
+    }
+
+    public function releaseLock(string $path, int $type, ILockingProvider $provider): void {
+        parent::releaseLock($this->lockPath($path), $type, $provider);
+    }
+
+    public function changeLock(string $path, int $type, ILockingProvider $provider): void {
+        parent::changeLock($this->lockPath($path), $type, $provider);
+    }
+
+    private function lockPath(string $path): string {
+        return $this->branch === '' ? $path : $this->branch . '/' . ltrim($path, '/');
+    }
+
     public function getETag(string $path): string|false {
         $normalized = self::normalizePath($path);
         $entry = $this->entry($path);
@@ -154,7 +287,8 @@ final class ArchiveStorage extends Common {
         }
         // Core filecache.etag is varchar(40). PostgreSQL enforces this bound;
         // SQLite accepts longer values and would hide an incompatible index.
-        return substr(hash('sha256', $this->getId() . '/' . $normalized . ':' . ($entry['crc'] ?? '') . ':' . $entry['size']), 0, 40);
+        $identity = $this->branch === '' ? $this->cacheIdentity : self::previousBranch((int)$this->mount['id'], (string)$this->mount['source_etag']);
+        return substr(hash('sha256', $identity . '/' . $normalized . ':' . ($entry['crc'] ?? '') . ':' . $entry['size']), 0, 40);
     }
 
     public function getMimeType(string $path): string|false {
@@ -330,10 +464,7 @@ final class ArchiveStorage extends Common {
         $this->resolvingAccess = true;
         try {
             $current = $this->repository->find((int)$this->mount['id']);
-            if ($current === null
-                || (int)$current['source_id'] !== (int)$this->mount['source_id']
-                || (int)$current['parent_id'] !== (int)$this->mount['parent_id']
-                || !hash_equals((string)$this->mount['source_etag'], (string)$current['source_etag'])) {
+            if (!$this->isCurrentMount($current)) {
                 throw new \RuntimeException('The archive connection changed.');
             }
 
@@ -368,7 +499,7 @@ final class ArchiveStorage extends Common {
             $entries = ['' => ['type' => 'dir', 'size' => 0, 'mtime' => $rootTime, 'originalName' => null]];
             foreach ($index['entries'] as $path => $metadata) {
                 $normalized = self::normalizePath((string)$path);
-                if ($normalized === null || $normalized === '' || !is_array($metadata)
+                if ($normalized === null || $normalized === '' || !self::fitsCachePath($this->branch, $normalized) || !is_array($metadata)
                     || !in_array($metadata['type'] ?? null, ['file', 'dir'], true)) {
                     throw new \RuntimeException('The archive index contains an invalid entry.');
                 }

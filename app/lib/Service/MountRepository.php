@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace OCA\ArchiveTools\Service;
 
+use OCA\ArchiveTools\Storage\ArchiveStorage;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\Files\Cache\IFileAccess;
 use OCP\IDBConnection;
 use OCP\Lock\ILockingProvider;
@@ -11,6 +13,7 @@ final class MountRepository {
     private array $touched = [];
     private array $exclusiveLocks = [];
     private array $activeLeases = [];
+    private bool $cacheTableKnown = false;
     private const LEASE_SECONDS = 300;
 
     public function __construct(
@@ -24,27 +27,74 @@ final class MountRepository {
         $qb = $this->db->getQueryBuilder();
         // Projections and lifecycle scans need identity, never every archive's
         // potentially large index or encrypted credential at once.
-        return $qb->select('id', 'source_id', 'parent_id', 'mount_name', 'created_by',
-            'pinned', 'last_access', 'source_etag')
-            ->from('archive_tools_mounts')->orderBy('id')->executeQuery()->fetchAllAssociative();
+        $qb->select('m.id', 'm.source_id', 'm.parent_id', 'm.mount_name', 'm.created_by',
+            'm.pinned', 'm.last_access', 'm.source_etag')->from('archive_tools_mounts', 'm')->orderBy('m.id');
+        $this->joinCacheRoute($qb);
+        return $qb->executeQuery()->fetchAllAssociative();
     }
 
     public function find(int $id): ?array {
         $qb = $this->db->getQueryBuilder();
-        $row = $qb->select('*')->from('archive_tools_mounts')
-            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
-            ->executeQuery()->fetchAssociative();
+        $qb->select('m.*')->from('archive_tools_mounts', 'm')
+            ->where($qb->expr()->eq('m.id', $qb->createNamedParameter($id)));
+        $this->joinCacheRoute($qb);
+        $row = $qb->executeQuery()->fetchAssociative();
         return $row === false ? null : $row;
     }
 
-    public function create(array $values): int {
-        $qb = $this->db->getQueryBuilder();
-        $parameters = [];
-        foreach ($values as $key => $value) {
-            $parameters[$key] = $qb->createNamedParameter($value);
+    private function joinCacheRoute(IQueryBuilder $qb): void {
+        // Files can initialize while Nextcloud is still applying the upgrade.
+        if (!$this->cacheTableKnown) {
+            $this->cacheTableKnown = $this->db->tableExists('archive_tools_cache');
         }
-        $qb->insert('archive_tools_mounts')->values($parameters)->executeStatement();
-        return (int)$qb->getLastInsertId();
+        if ($this->cacheTableKnown) {
+            $qb->leftJoin('m', 'archive_tools_cache', 'c', $qb->expr()->eq('m.id', 'c.mount_id'))
+                ->addSelect('c.cache_identity', 'c.cache_path', 'c.cache_numeric_id');
+        }
+    }
+
+    public function create(array $values): int {
+        $transaction = !$this->db->inTransaction();
+        if ($transaction) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $qb = $this->db->getQueryBuilder();
+            $parameters = [];
+            foreach ($values as $key => $value) {
+                $parameters[$key] = $qb->createNamedParameter($value);
+            }
+            $qb->insert('archive_tools_mounts')->values($parameters)->executeStatement();
+            $id = (int)$qb->getLastInsertId();
+            $this->reserveCache($id, ArchiveStorage::STORAGE_ID, ArchiveStorage::branch($id));
+            if ($transaction) {
+                $this->db->commit();
+            }
+            return $id;
+        } catch (\Throwable $error) {
+            if ($transaction) {
+                $this->db->rollBack();
+            }
+            throw $error;
+        }
+    }
+
+    /** Called before materializing a new cache or when adopting a known old connection. */
+    public function reserveCache(int $id, string $identity, string $path, ?int $numericId = null): void {
+        $qb = $this->db->getQueryBuilder();
+        $qb->insert('archive_tools_cache')->values([
+            'mount_id' => $qb->createNamedParameter($id),
+            'cache_identity' => $qb->createNamedParameter($identity),
+            'cache_path' => $qb->createNamedParameter($path),
+            'cache_numeric_id' => $qb->createNamedParameter($numericId),
+        ])->executeStatement();
+    }
+
+    public function rememberCacheStorage(int $id, int $numeric): void {
+        $qb = $this->db->getQueryBuilder();
+        $qb->update('archive_tools_cache')->set('cache_numeric_id', $qb->createNamedParameter($numeric))
+            ->where($qb->expr()->eq('mount_id', $qb->createNamedParameter($id)))
+            ->andWhere($qb->expr()->eq('cache_path', $qb->createNamedParameter('')))->executeStatement();
     }
 
     public function touch(int $id, bool $force = false): void {
@@ -70,11 +120,25 @@ final class MountRepository {
             if ($this->hasActiveLeases($id)) {
                 throw new \RuntimeException('The archive is currently in use. Try again when the operation has finished.');
             }
-            $this->virtualStorageCleanup->removeConnection($id);
-            $qb = $this->db->getQueryBuilder();
-            $qb->delete('archive_tools_mounts')->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))->executeStatement();
-            $qb = $this->db->getQueryBuilder();
-            $qb->delete('archive_tools_leases')->where($qb->expr()->eq('mount_id', $qb->createNamedParameter($id)))->executeStatement();
+            $transaction = !$this->db->inTransaction();
+            if ($transaction) {
+                $this->db->beginTransaction();
+            }
+            try {
+                $this->virtualStorageCleanup->removeConnection($id);
+                $qb = $this->db->getQueryBuilder();
+                $qb->delete('archive_tools_mounts')->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))->executeStatement();
+                $qb = $this->db->getQueryBuilder();
+                $qb->delete('archive_tools_leases')->where($qb->expr()->eq('mount_id', $qb->createNamedParameter($id)))->executeStatement();
+                if ($transaction) {
+                    $this->db->commit();
+                }
+            } catch (\Throwable $error) {
+                if ($transaction) {
+                    $this->db->rollBack();
+                }
+                throw $error;
+            }
         });
     }
 
@@ -226,22 +290,9 @@ final class MountRepository {
         $qb->delete('archive_tools_leases')->where($qb->expr()->lte('expires_at', $qb->createNamedParameter($now ?? time())))->executeStatement();
     }
 
-    /** A recipient losing a share does not establish that the original file was removed. */
+    /** A trashed source retains its file ID so restoration can revive the connection. */
     public function isSourceMissing(int $sourceId): bool {
-        $entry = $this->fileCache->getByFileId($sourceId);
-        if ($entry === null) {
-            return true;
-        }
-        if (!str_starts_with($entry->getPath(), 'files_trashbin/')) {
-            return false;
-        }
-        // The public cache entry exposes only the numeric storage ID. The
-        // string identity distinguishes home trash from a similarly named folder.
-        $qb = $this->db->getQueryBuilder();
-        $storageId = $qb->select('id')->from('storages')
-            ->where($qb->expr()->eq('numeric_id', $qb->createNamedParameter((int)$entry->getStorageId())))
-            ->executeQuery()->fetchOne();
-        return is_string($storageId) && str_starts_with($storageId, 'home::');
+        return $this->fileCache->getByFileId($sourceId) === null;
     }
 
     private function lockKey(int $id): string {

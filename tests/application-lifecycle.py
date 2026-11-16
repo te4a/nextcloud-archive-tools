@@ -2,7 +2,9 @@
 """Real lifecycle regression in a separate, networkless disposable Nextcloud."""
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import re
 import runpy
 import subprocess
@@ -17,11 +19,22 @@ H = V['H']
 PROJECT = 'archive-tools-dev-lifecycle-fixture'
 PUBLIC_PASSWORD = 'ArchiveTools-Lifecycle-Fixture-2026!'
 HELPER = '/opt/archive-tools-tests/application-lifecycle.php'
+IMAGES = {'34': 'nextcloud:34.0.5-apache', '35': 'nextcloud:35.0.2-apache'}
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise H['TestFailure'](message)
+
+
+def fixture_image(docker, major: str) -> str:
+    override = os.environ.get('DOCKER_HOST')
+    endpoint = json.loads(docker.run(['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}'], compose=False))
+    require(H['local_docker_endpoint'](endpoint) and (not override or H['local_docker_endpoint'](override)),
+            'The fixture requires a local Docker endpoint.')
+    image = docker.run(['image', 'inspect', '--format', '{{.Id}}', IMAGES[major]], compose=False)
+    require(re.fullmatch(r'sha256:[a-f0-9]{64}', image) is not None, 'The local fixture image is unavailable.')
+    return image
 
 
 def fixture_identity(docker, container: str, volume: str, token: str, image: str) -> None:
@@ -51,21 +64,23 @@ def fixture_identity(docker, container: str, volume: str, token: str, image: str
     require(len(mounts) == 3, 'The disposable fixture contains an unexpected mount.')
 
 
-def run(report) -> None:
+def stop_fixture(docker, container: str, volume: str, token: str, image: str) -> None:
+    fixture_identity(docker, container, volume, token, image)
+    docker.run(['stop', '--time', '1', container], compose=False, timeout=15)
+    deadline = time.monotonic() + 15
+    while docker.run(['ps', '--all', '--quiet', '--filter', 'id=' + container], compose=False):
+        require(time.monotonic() < deadline, 'Docker has not finished removing the disposable container.')
+        time.sleep(.2)
+
+
+def run(report, major: str) -> None:
     report.secrets.append(PUBLIC_PASSWORD)
-    report.secrets.extend(H['read_environment']().values())
     docker = V['SafeDocker'](report)
-    docker.assert_test_stack()  # Read-only validation of the local Docker context.
     manifest = (ROOT / 'app' / 'appinfo' / 'info.xml').read_text(encoding='utf-8')
     require('OCA\\ArchiveTools\\Repair\\InstallApplicationState' in manifest
             and 'OCA\\ArchiveTools\\Repair\\RepairApplicationState' in manifest,
             'Register the explicit install and upgrade lifecycle repair hooks before this regression.')
-    source = docker.run(['ps', '--quiet', 'nextcloud'])
-    image_tag = docker.run(['inspect', '--format', '{{.Config.Image}}', source], compose=False)
-    require(re.fullmatch(r'archive-tools-nextcloud-dev:[A-Za-z0-9_.-]+', image_tag) is not None,
-            'Only the existing local custom Nextcloud image may be used.')
-    image = docker.run(['image', 'inspect', '--format', '{{.Id}}', image_tag], compose=False)
-    require(re.fullmatch(r'sha256:[a-f0-9]{64}', image) is not None, 'The local immutable fixture image is missing.')
+    image = fixture_image(docker, major)
     token = uuid.uuid4().hex
     volume = 'archive-tools-dev-lifecycle-' + token
     name = volume
@@ -74,7 +89,6 @@ def run(report) -> None:
     require(docker.run(['volume', 'create', '--label', 'com.docker.compose.project=' + PROJECT,
                         '--label', 'com.archive-tools.lifecycle-fixture=' + token, volume], compose=False) == volume,
             'Docker returned an unexpected fixture volume.')
-    report.data['retainedFixtureVolume'] = volume
     container = ''
     holder = None
 
@@ -93,7 +107,7 @@ def run(report) -> None:
 
     try:
         # The image's VOLUME is replaced by our unique named fixture volume.
-        # Both read-only host paths are already shared by the development stack.
+        # Mount source and test files read-only in the disposable container.
         initialization = ('set -eu; cp -a /usr/src/nextcloud/. /var/www/html/; '
                           'find /var/www/html -path /var/www/html/custom_apps/archive_tools -prune '
                           '-o -exec chown www-data:www-data {} +; '
@@ -184,23 +198,29 @@ def run(report) -> None:
             except subprocess.TimeoutExpired:
                 docker._stop_tree(holder)
         if container:
-            fixture_identity(docker, container, volume, token, image)
-            docker.run(['stop', '--time', '1', container], compose=False, timeout=15)
+            stop_fixture(docker, container, volume, token, image)
             report.data['disposableContainerStopped'] = True
+        labels = json.loads(docker.run(['volume', 'inspect', '--format', '{{json .Labels}}', volume], compose=False))
+        require(labels.get('com.archive-tools.lifecycle-fixture') == token, 'The disposable volume owner changed.')
+        docker.run(['volume', 'rm', volume], compose=False, timeout=15)
+        report.data['disposableVolumeRemoved'] = True
         report.data['mainStackRecreated'] = False
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--nextcloud', choices=IMAGES, default='34')
+    major = parser.parse_args().nextcloud
     report = H['Report']('application-lifecycle-' + uuid.uuid4().hex)
     try:
-        run(report)
+        run(report, major)
         result = 0
     except BaseException as error:
         report.data['status'] = 'failed'
         report.data['error'] = report.redact(str(error))
         result = 1
     report.data['elapsedSeconds'] = round(time.monotonic() - report.started, 2)
-    destination = ROOT / '.test-results' / 'latest-application-lifecycle.json'
+    destination = ROOT / '.test-results' / ('latest-application-lifecycle-' + major + '.json')
     destination.parent.mkdir(exist_ok=True)
     destination.write_text(report.redact(json.dumps(report.data, indent=2)) + '\n', encoding='utf-8')
     print(report.redact(json.dumps(report.data, indent=2)))

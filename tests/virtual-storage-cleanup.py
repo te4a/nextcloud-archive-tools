@@ -2,6 +2,7 @@
 """Real cache cleanup/reaper regression in a separate disposable SQLite instance."""
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import runpy
@@ -20,17 +21,10 @@ def require(condition: bool, message: str) -> None:
         raise H['TestFailure'](message)
 
 
-def run(report) -> None:
-    report.secrets.extend(H['read_environment']().values())
+def run(report, major: str) -> None:
     report.secrets.append(L['PUBLIC_PASSWORD'])
     docker = V['SafeDocker'](report)
-    docker.assert_test_stack()  # Read-only main context/image discovery.
-    current = docker.run(['ps', '--quiet', 'nextcloud'])
-    image_tag = docker.run(['inspect', '--format', '{{.Config.Image}}', current], compose=False)
-    require(re.fullmatch(r'archive-tools-nextcloud-dev:[A-Za-z0-9_.-]+', image_tag) is not None,
-            'The existing local custom Nextcloud image is required.')
-    image = docker.run(['image', 'inspect', '--format', '{{.Id}}', image_tag], compose=False)
-    require(re.fullmatch(r'sha256:[a-f0-9]{64}', image) is not None, 'The local fixture image is unavailable.')
+    image = L['fixture_image'](docker, major)
     token = uuid.uuid4().hex
     volume = 'archive-tools-dev-virtual-cache-' + token
     name = 'archive-tools-dev-lifecycle-' + token
@@ -40,7 +34,6 @@ def run(report) -> None:
                         '--label', 'com.archive-tools.lifecycle-fixture=' + token,
                         '--label', 'com.archive-tools.fixture-role=virtual-storage-cleanup', volume], compose=False) == volume,
             'Docker returned an unexpected private fixture volume.')
-    report.data['retainedFixtureVolume'] = volume
     report.data['testScope'] = 'whole-app reaper only in private SQLite instance; no main cleanup'
     container = ''
 
@@ -83,33 +76,36 @@ def run(report) -> None:
                 '--data-dir', '/var/www/html/data', timeout=180)
         execute('php', '/var/www/html/occ', '--no-warnings', 'app:enable', 'archive_tools')
         phase('seed')
-        for _ in range(3):
-            # Separate PHP invocations model fresh HTTP request/service graphs.
-            phase('connect')
-            phase('disconnect')
-        for action in ['live', 'active-connection', 'seed-orphans', 'first-page', 'second-page',
-                       'third-page', 'lease-expired', 'rootless', 'remove-live', 'remove-all']:
+        # Separate PHP invocations model fresh HTTP request/service graphs.
+        for action in ['connect', 'disconnect', 'legacy', 'legacy-read', 'seed-orphans', 'first-page',
+                       'second-page', 'rootless', 'lease-expired', 'remove-live', 'remove-all']:
             phase(action)
         report.data['status'] = 'passed'
     finally:
         if container:
-            L['fixture_identity'](docker, container, volume, token, image)
-            docker.run(['stop', '--time', '1', container], compose=False, timeout=15)
+            L['stop_fixture'](docker, container, volume, token, image)
             report.data['disposableInstanceStopped'] = True
+        labels = json.loads(docker.run(['volume', 'inspect', '--format', '{{json .Labels}}', volume], compose=False))
+        require(labels.get('com.archive-tools.lifecycle-fixture') == token, 'The disposable volume owner changed.')
+        docker.run(['volume', 'rm', volume], compose=False, timeout=15)
+        report.data['disposableVolumeRemoved'] = True
         report.data['mainStackRecreated'] = False
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--nextcloud', choices=L['IMAGES'], default='34')
+    major = parser.parse_args().nextcloud
     report = H['Report']('virtual-storage-cleanup-' + uuid.uuid4().hex)
     try:
-        run(report)
+        run(report, major)
         result = 0
     except BaseException as error:
         report.data['status'] = 'failed'
         report.data['error'] = report.redact(str(error))
         result = 1
     report.data['elapsedSeconds'] = round(time.monotonic() - report.started, 2)
-    destination = ROOT / '.test-results' / 'latest-virtual-storage-cleanup.json'
+    destination = ROOT / '.test-results' / ('latest-virtual-storage-cleanup-' + major + '.json')
     destination.parent.mkdir(exist_ok=True)
     destination.write_text(report.redact(json.dumps(report.data, indent=2)) + '\n', encoding='utf-8')
     print(report.redact(json.dumps({'status': report.data['status'], 'checks': len(report.data['checks']),

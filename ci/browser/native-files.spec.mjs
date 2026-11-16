@@ -200,6 +200,39 @@ test('selection, native destination picker, queued extraction and pinned connect
   await page.screenshot({ path: join(fixture.outputDirectory, 'pinned-connection.png') })
 })
 
+test('an unavailable connection offers only disconnect without source metadata', async ({ page }) => {
+  const connection = {
+    id: 321,
+    parentId: Number(fixture.folderId),
+    name: 'Unavailable connection',
+    path: 'CI Archives/Unavailable connection',
+    pinned: true,
+    available: false,
+    canManage: true,
+    state: 'source_unavailable',
+  }
+  let disconnected = false
+  await page.route('**/apps/archive_tools/mounts', route => route.fulfill({ json: disconnected ? [] : [connection] }))
+  await page.route('**/apps/archive_tools/mounts/' + connection.id, async route => {
+    expect(route.request().method()).toBe('DELETE')
+    disconnected = true
+    await route.fulfill({ json: { disconnected: true } })
+  })
+
+  await page.goto('/index.php/apps/archive_tools/')
+  await page.getByRole('button', { name: /^Connected archives/ }).click()
+  const card = page.locator('.at-card').filter({ has: page.getByRole('heading', { name: connection.name, exact: true }) })
+  await expect(card.getByText('Source unavailable', { exact: true })).toBeVisible()
+  await expect(card.getByRole('button')).toHaveText(['Disconnect for everyone'])
+  await expect(card.getByText('Connected by', { exact: false })).toHaveCount(0)
+  await card.getByRole('button', { name: 'Disconnect for everyone', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Disconnect for everyone', exact: true })
+  await expect(dialog.getByText('Disconnect “Unavailable connection” for all participants?', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Disconnect for everyone', exact: true }).click()
+  await expect(card).toHaveCount(0)
+  await expect(page.getByText('Archive disconnected.', { exact: true })).toBeVisible()
+})
+
 test('encrypted headers, wrong password, unlock, reload and cancellation return', async ({ page }) => {
   await openRow(page, 'Protected.7z')
   const password = page.getByRole('dialog', { name: 'Archive password', exact: true })

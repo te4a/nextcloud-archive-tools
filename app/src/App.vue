@@ -340,7 +340,8 @@ async function confirmDisconnect(): Promise<void> {
   try {
     await api('/mounts/' + mount.id, { method: 'DELETE' })
     closeDialog()
-    notice.value = tr('Archive disconnected. The original file was kept.')
+    notice.value = mount.state === 'source_unavailable'
+      ? tr('Archive disconnected.') : tr('Archive disconnected. The original file was kept.')
     await refreshCollections()
   } catch (caught) { error.value = errorMessage(caught) }
   finally { actionBusy.value = false }
@@ -485,11 +486,22 @@ onBeforeUnmount(() => {
         <div v-if="mounts.length === 0" class="at-empty"><span class="at-empty-icon" aria-hidden="true">▣</span><h2>{{ tr('No connected archives') }}</h2><p>{{ tr('Open an archive and choose “Connect as folder” to make its contents available alongside the original file.') }}</p><button @click="pickArchive">{{ tr('Choose archive') }}</button></div>
         <ul v-else class="at-card-list">
           <li v-for="mount in mounts" :key="mount.id" class="at-card">
-            <div class="at-card-title"><h2>{{ mount.name }}</h2><span v-if="mount.state === 'source_changed'" class="at-badge at-status-failed">{{ tr('Source changed') }}</span><span v-else-if="mount.pinned" class="at-badge">{{ tr('Pinned') }}</span></div>
+            <div class="at-card-title">
+              <h2>{{ mount.name }}</h2>
+              <span v-if="mount.state === 'source_unavailable'" class="at-badge at-status-failed">{{ tr('Source unavailable') }}</span>
+              <span v-else-if="mount.state === 'source_changed'" class="at-badge at-status-failed">{{ tr('Source changed') }}</span>
+              <span v-else-if="mount.pinned" class="at-badge">{{ tr('Pinned') }}</span>
+            </div>
             <p v-if="mount.path" class="at-path">{{ mount.path }}</p>
             <p v-if="mount.state === 'source_changed'">{{ tr('The original archive changed. Disconnect and connect it again to refresh this folder.') }}</p>
-            <p>{{ n('archive_tools', '%n file', '%n files', mount.fileCount) }} · {{ bytes(mount.totalSize) }} · {{ tr('Connected by {user}', { user: mount.createdBy }) }}</p>
-            <div class="at-card-actions"><button @click="openSource(mount.sourceId)">{{ tr('Open archive') }}</button><button v-if="mount.canManage && (settings.allowPin || mount.pinned)" @click="togglePinned(mount)">{{ mount.pinned ? tr('Unpin') : tr('Pin') }}</button><button v-if="mount.canManage" class="at-danger" @click="disconnect(mount)">{{ tr('Disconnect for everyone') }}</button></div>
+            <p v-if="mount.state !== 'source_unavailable'">{{ n('archive_tools', '%n file', '%n files', mount.fileCount) }} · {{ bytes(mount.totalSize) }} · {{ tr('Connected by {user}', { user: mount.createdBy }) }}</p>
+            <div class="at-card-actions">
+              <template v-if="mount.state !== 'source_unavailable'">
+                <button @click="openSource(mount.sourceId)">{{ tr('Open archive') }}</button>
+                <button v-if="mount.canManage && (settings.allowPin || mount.pinned)" @click="togglePinned(mount)">{{ mount.pinned ? tr('Unpin') : tr('Pin') }}</button>
+              </template>
+              <button v-if="mount.canManage" class="at-danger" @click="disconnect(mount)">{{ tr('Disconnect for everyone') }}</button>
+            </div>
           </li>
         </ul>
       </template>
@@ -540,7 +552,8 @@ onBeforeUnmount(() => {
         </form>
         <form v-else @submit.prevent="confirmDisconnect" :aria-busy="actionBusy">
           <h2 id="at-dialog-title">{{ tr('Disconnect for everyone') }}</h2>
-          <p>{{ tr('Disconnect “{name}” for all participants? The original archive will be kept.', { name: pendingDisconnect?.name || '' }) }}</p>
+          <p v-if="pendingDisconnect?.state === 'source_unavailable'">{{ tr('Disconnect “{name}” for all participants?', { name: pendingDisconnect.name }) }}</p>
+          <p v-else>{{ tr('Disconnect “{name}” for all participants? The original archive will be kept.', { name: pendingDisconnect?.name || '' }) }}</p>
           <p v-if="error" class="at-dialog-error" role="alert">{{ error }}</p>
           <div class="at-dialog-actions"><button type="button" :disabled="actionBusy" @click="closeDialog" autofocus>{{ tr('Cancel') }}</button><button type="submit" class="at-danger" :disabled="actionBusy">{{ tr('Disconnect for everyone') }}</button></div>
         </form>

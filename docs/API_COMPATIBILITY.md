@@ -51,10 +51,8 @@ and review are separate release concerns.
 | Integration | Application location | Decision |
 | --- | --- | --- |
 | `OC\Files\Storage\Common` | `ArchiveStorage`, `MetadataOnlyStorage` | Retain the documented storage backend base. The cleanup adapter has no user-file access or writable filesystem operations. |
-| `OC\Files\Cache\Storage::getGlobalCache()` | `VirtualStorageCleanup` | Clear the process-local storage identity map after removing an exact app-owned virtual storage. This concrete cache bridge remains version-sensitive. |
-| Core `storages` metadata schema | `VirtualStorageCleanup` | Enumerate only strict `archive_tools:<id>:<24hex>` identities. Use native cache removal and the public user mount-cache API. Delete the exact matching storage record. |
-| `ICache::searchQuery()`, `ICache::remove()` | `VirtualStorageCleanup` | Find leftover cache entries in bounded batches using the storage's own search filter. Remove them through the native cache API, including related metadata. |
-| `IFileAccess::getByFileId()` | `MountRepository` | Use the public exact file-ID lookup to detect a deleted source. Look up the string identity in the core storage registry only for a cache path that could be in home trash. |
+| `ICache::searchQuery()`, `ICache::remove()`, `IUserMountCache::removeMount()` | `VirtualStorageCleanup` | Remove the cache data and user mount points recorded in the app's cache registry. New connections use distinct roots in one virtual storage. An upgrade preserves the cache location of each existing connection. |
+| `IFileAccess::getByFileId()` | `MountRepository` | Detect permanent source deletion by file ID. Access checks hide the connection while the source is in the recycle bin. |
 | `IMountPoint`, `IMovableMount`, `IStorageFactory` | `ArchiveMountPoint` | The archive mount implements the public interfaces and asks the core factory to apply its storage wrappers. Archive Tools supplies the lazy storage identity and maps each recipient's share path to the shared archive contents. |
 | `OC\Files\Cache\Wrapper\CacheWrapper` | `AccessCache` | Retain the native cache decorator for the stable root/storage identity, access checks, and compatibility with the native scanner. The scanner and storage base depend on methods beyond `ICache`. |
 | `OC\Files\Cache\FailedCache` | `AccessCache` | Retain the native inaccessible-cache behavior. Its denied root is a server-provided `ICacheEntry`, which Nextcloud marks `Consumable`. |
@@ -81,11 +79,10 @@ locks used here.
 
 ## Questions for Nextcloud maintainers
 
-- Can apps enumerate and retire their own unmounted storage identities through a
-  supported API? Retirement needs to remove the metadata and mount projections
-  and invalidate the process-local identity mapping. For source deletion, a
-  public way to resolve a cached file's storage type or trash status would remove
-  the remaining home-trash lookup against the same registry.
+- Can apps retire their own storage registrations through a supported API?
+  Archive Tools now removes virtual file metadata and mount projections through
+  public APIs. The remaining permanent registration and obsolete beta registry
+  records need a core API for removal.
 - Is there a supported cache decorator for a native storage whose access can
   change during a request? It needs to preserve the storage/root identity,
   hide cached member entries after access is lost, and work with the native
@@ -122,11 +119,9 @@ exception, and cleanup of only its own users and queue/task rows. Existing queue
 security and concurrency suites cover shared destinations, stream errors,
 cancellation, rollback, and transactional locking.
 
-The virtual-storage cleanup suite passed 158 checks on each of Nextcloud 34.0.5
-and 35.0.2 with SQLite. It covers removing 201 cache entries without a root or
-cached user mount, removing their extended metadata, and getting a fresh
-storage ID in the same PHP process. It also checks that active connections,
-source archives, and extracted files survive orphan cleanup.
+The virtual-storage cleanup suite uses a disposable Nextcloud instance. It
+exercises independent cache roots, cleanup after interrupted scans, active
+leases and the guarded cleanup of identifiable beta caches.
 
 The same application tree passed 263 PHP checks and 564 HTTP assertions on
 each version with PostgreSQL and Redis. Native cron completed the queued

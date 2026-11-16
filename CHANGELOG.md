@@ -1,9 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## 0.5.0-beta.5
 
 - Let administrators configure the maximum expanded size for new archive connections. The default is 4 GiB.
 - Open the connection dialog directly from the Files action menu so connecting an archive does not first load its browsing index.
+- Keep an archive connection recoverable while the original is in the Nextcloud trash. Let the folder owner disconnect it manually while the source is unavailable.
+- Store new connections under separate roots in one virtual storage. Preserve existing cache routes when upgrading so old mount paths and file IDs keep working.
+- Track archive cache locations in the app database and use the public file and mount cache APIs for cleanup.
 
 ## 0.5.0-beta.4
 

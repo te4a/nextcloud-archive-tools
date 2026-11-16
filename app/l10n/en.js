@@ -347,5 +347,14 @@ OC.L10N.register("archive_tools", {
     "Invalid archive connection size limit.": "Invalid archive connection size limit.",
     "The archive exceeds the expanded size limit for connections.": "The archive exceeds the expanded size limit for connections.",
     "A file in the archive exceeds the maximum size for connected files.": "A file in the archive exceeds the maximum size for connected files.",
-    "The archive connection size limit must be a positive whole number in MiB that fits on this server.": "The archive connection size limit must be a positive whole number in MiB that fits on this server."
+    "The archive connection size limit must be a positive whole number in MiB that fits on this server.": "The archive connection size limit must be a positive whole number in MiB that fits on this server.",
+    "An archive member path is too long to connect this archive.": "An archive member path is too long to connect this archive.",
+    "Archive connections are read-only.": "Archive connections are read-only.",
+    "Archive disconnected.": "Archive disconnected.",
+    "Disconnect “{name}” for all participants?": "Disconnect “{name}” for all participants?",
+    "Source unavailable": "Source unavailable",
+    "An archive member path is too long to connect this archive. Open the archive to browse its contents.": "An archive member path is too long to connect this archive. Open the archive to browse its contents.",
+    "Invalid archive cache location.": "Invalid archive cache location.",
+    "Invalid shared archive cache path.": "Invalid shared archive cache path.",
+    "The legacy archive cache identity changed during cleanup.": "The legacy archive cache identity changed during cleanup."
 }, "nplurals=2; plural=(n != 1);");

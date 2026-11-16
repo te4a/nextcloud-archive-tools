@@ -4,7 +4,7 @@
 
 Archive Tools is a native Nextcloud application for browsing archives inside Files, extracting selected entries through the background queue, and connecting archives as shared read-only folders accessible through WebDAV.
 
-The current prerelease is `0.5.0-beta.4`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
+The current prerelease is `0.5.0-beta.5`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
 
 ![Archive browsing inside Nextcloud Files](docs/images/native-files.png)
 
@@ -46,7 +46,9 @@ Connections, active tasks and retained metadata have server-side limits. Adminis
 | Allow pinning | Enabled |
 | Extraction-history retention | 30 days; 0 keeps history indefinitely |
 
-Idle activity is shared among participants. Reading archive contents prolongs the connection. Listing its parent folder or generating a background preview does not keep it connected indefinitely. Pinned connections stay until explicitly disconnected.
+Idle activity is shared among participants. Reading archive contents prolongs the connection. Listing its parent folder or generating a background preview does not keep it connected indefinitely. Pinned connections are exempt from idle cleanup.
+
+A connection is hidden in Files while its source is in the Nextcloud trash. The parent folder owner can disconnect it in Archive Tools. If kept, the connection becomes available again when the file returns to its parent folder with the same file ID and ETag before the connection expires. Background cleanup removes it after permanent source deletion, even if it is pinned.
 
 `occ archive_tools:diagnose --output=json` reports runtime capabilities and configuration without passwords, user names or data paths.
 

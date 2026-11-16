@@ -45,6 +45,10 @@ final class MountProvider implements IMountProvider {
         $userRoot = '/' . $user->getUID() . '/files';
 
         foreach ($this->mounts->findAll() as $row) {
+            if (($row['cache_identity'] ?? null) === null) {
+                // The upgrade repair step assigns the preserved cache route.
+                continue;
+            }
             $name = (string)$row['mount_name'];
             if ($name === '' || $name === '.' || $name === '..'
                 || strpbrk($name, "/\\\0") !== false) {
