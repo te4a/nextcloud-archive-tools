@@ -5,18 +5,20 @@ namespace OCA\ArchiveTools\Controller;
 
 use OCA\ArchiveTools\Service\SettingsService;
 use OCA\ArchiveTools\Archive\ArchiveReader;
+use OCA\Viewer\Event\LoadViewer;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Http\RedirectResponse;
 use OCP\AppFramework\Services\IInitialState;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IRequest;
 use OCP\IURLGenerator;
 use OCP\Util;
 
 final class PageController extends Controller {
-    public function __construct(IRequest $request, private SettingsService $settings, private IInitialState $initialState, private IURLGenerator $urls, private ArchiveReader $reader) {
+    public function __construct(IRequest $request, private SettingsService $settings, private IInitialState $initialState, private IURLGenerator $urls, private ArchiveReader $reader, private IEventDispatcher $events) {
         parent::__construct('archive_tools', $request);
     }
 
@@ -30,6 +32,9 @@ final class PageController extends Controller {
         $this->initialState->provideInitialState('settings', $this->settings->getSettings());
         $this->initialState->provideInitialState('archiveFormats', $this->reader->supportedFormats());
         $this->initialState->provideInitialState('sourceId', $sourceId);
+        if (class_exists(LoadViewer::class)) {
+            $this->events->dispatchTyped(new LoadViewer());
+        }
         Util::addScript('archive_tools', 'main');
         Util::addStyle('archive_tools', 'archive-tools');
         return new TemplateResponse('archive_tools', 'main');

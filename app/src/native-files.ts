@@ -1,4 +1,3 @@
-import { getRequestToken } from '@nextcloud/auth'
 import { showError, showSuccess } from '@nextcloud/dialogs'
 import { emit } from '@nextcloud/event-bus'
 import {
@@ -9,6 +8,7 @@ import type { ActionContext, IFileAction, IFileListAction, IFolder, INode, IView
 import { t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
 import { api, ApiError, errorMessage, isAborted } from './api.ts'
+import { canPreviewMember, downloadArchiveMember, previewArchiveMember } from './member-transfer.ts'
 import {
   ARCHIVE_NODE_MARKER, archiveDirectories, archiveEtagIdentity, archiveRenderIds, archiveSourceId, archiveViewId, decodeArchiveDirectory,
   encodeArchivePath, lockedArchiveRenderId, readFilesReturnRoute, sanitizeFilesReturnRoute, zipRenderId,
@@ -42,6 +42,7 @@ interface ArchiveViewState {
   invalid: boolean; locked: boolean; prompting: boolean; closing: boolean; pendingAction: 'extract' | null
   passwordError?: string
   lifetime: AbortController
+  memberTransfers: Map<string, string>
 }
 
 const states = new Map<string, ArchiveViewState>()
@@ -160,7 +161,7 @@ function archiveNode(state: ArchiveViewState, entry?: ArchiveEntry): INode {
   }
   const node = !entry || entry.type === 'dir'
     ? new ArchiveFolder(data, member, info.sourceName)
-    : new ArchiveFile({ ...data, mime: 'application/octet-stream' }, member, info.sourceName)
+    : new ArchiveFile({ ...data, mime: entry.previewMime ?? 'application/octet-stream' }, member, info.sourceName)
   snapshots.set(node, { sourceId: state.sourceId, etag: info.sourceEtag, member, type: entry?.type ?? 'dir', generation: state.generation })
   return node
 }
@@ -327,6 +328,7 @@ function ensureView(sourceId: string): ArchiveViewState {
   if (existing) return existing
   const state = {
     sourceId, password: '', returnRoute: storedReturn(sourceId), generation: 0,
+    memberTransfers: new Map(),
     invalid: false, locked: false, prompting: false, closing: false, pendingAction: null, lifetime: new AbortController(),
   } as ArchiveViewState
   state.view = {
@@ -471,6 +473,11 @@ function updateHeader(state: ArchiveViewState): void {
     const message = loading?.message ?? ''
     if (status.textContent !== message) status.textContent = message
   }
+  const transfer = headerElement.querySelector<HTMLElement>('[data-archive-transfer]')
+  if (transfer) {
+    const message = [...state.memberTransfers.values()].at(-1) ?? ''
+    if (transfer.textContent !== message) transfer.textContent = message
+  }
   const title = headerElement.querySelector<HTMLElement>('[data-archive-name]')
   if (title) title.textContent = state.listing?.info.sourceName || state.sourceName || tr('Archive viewer')
   for (const button of headerElement.querySelectorAll<HTMLButtonElement>('button[data-archive-action]')) {
@@ -511,47 +518,41 @@ function renderHeader(element: HTMLElement, _folder: IFolder, view: IView): void
   const status = document.createElement('div')
   status.className = 'archive-tools-files-loading'
   status.setAttribute('role', 'status')
+  const transfer = document.createElement('div')
+  transfer.className = 'archive-tools-files-transfer'
+  transfer.dataset.archiveTransfer = ''
+  transfer.setAttribute('role', 'status')
   dialogHost = document.createElement('div')
-  element.append(toolbar, status, dialogHost)
+  element.append(toolbar, status, transfer, dialogHost)
   const state = states.get(view.id)
   if (state) { updateHeader(state); void promptPending(state) }
 }
 
-function downloadMember(state: ArchiveViewState, node: INode): void {
-  const [member] = selectedMembers(state, [node])
-  // A hidden same-origin download sink keeps JSON errors out of the Files
-  // document and lets the browser stream attachments without a full-size Blob.
-  const sink = document.createElement('iframe')
-  sink.name = 'archive-tools-download-' + crypto.randomUUID()
-  sink.hidden = true; sink.tabIndex = -1; sink.setAttribute('aria-hidden', 'true')
-  let cleanupTimer: ReturnType<typeof setTimeout>
-  const cleanup = (): void => {
-    clearTimeout(cleanupTimer)
-    state.lifetime.signal.removeEventListener('abort', cleanup)
-    sink.remove()
+async function transferMember(state: ArchiveViewState, node: INode, preview: boolean): Promise<void> {
+  let key: string | undefined
+  try {
+    const [member] = selectedMembers(state, [node])
+    const request = {
+      sourceId: state.sourceId, member, expectedEtag: state.listing!.info.sourceEtag,
+      password: state.password, signal: state.lifetime.signal,
+    }
+    const operationKey = state.generation + ':' + (preview ? 'preview:' : 'download:') + member
+    if (state.memberTransfers.has(operationKey)) return
+    key = operationKey
+    state.memberTransfers.set(key, preview
+      ? tr('Opening {name}…', { name: node.basename })
+      : tr('Preparing {name} for download…', { name: node.basename }))
+    updateHeader(state)
+    if (preview) await previewArchiveMember(request, node.mime, node.id!)
+    else await downloadArchiveMember(request)
+  } catch (error) {
+    if (!isAborted(error)) showError(errorMessage(error))
+  } finally {
+    if (key) {
+      state.memberTransfers.delete(key)
+      updateHeader(state)
+    }
   }
-  sink.addEventListener('load', () => {
-    const text = sink.contentDocument?.body?.textContent?.trim()
-    if (!text) return // Initial about:blank; attachments are handed to the browser.
-    try {
-      const response = JSON.parse(text)
-      showError(typeof response.message === 'string' ? response.message : tr('The operation failed. Try again.'))
-    } catch { showError(tr('The operation failed. Try again.')) }
-    cleanup()
-  })
-  state.lifetime.signal.addEventListener('abort', cleanup, { once: true })
-  // Attachment navigation has no load/completion event. Retire its empty sink
-  // after hand-off while the browser owns the download transfer.
-  cleanupTimer = setTimeout(cleanup, 300000)
-  document.body.append(sink)
-  const form = document.createElement('form')
-  form.method = 'POST'; form.action = generateUrl('/apps/archive_tools/archives/' + state.sourceId + '/download')
-  form.target = sink.name; form.hidden = true
-  for (const [name, value] of Object.entries({ member, expectedEtag: state.listing!.info.sourceEtag, password: state.password, requesttoken: getRequestToken() || '' })) {
-    const field = document.createElement('input')
-    field.type = 'hidden'; field.name = name; field.value = value; form.append(field)
-  }
-  document.body.append(form); form.submit(); form.remove()
 }
 
 function registerOwnAction(action: IFileAction): void { ownedActions.add(action.id); registerFileAction(action) }
@@ -584,10 +585,17 @@ export function initializeNativeArchives(): void {
     },
   })
   registerOwnAction({
+    id: 'archive-tools-native-preview', displayName: () => tr('Open in viewer'), iconSvgInline: () => archiveIcon,
+    order: -100, default: DefaultType.DEFAULT,
+    enabled: context => isArchiveView(context.view) && context.nodes.length === 1 && context.nodes[0].type === 'file'
+      && snapshots.has(context.nodes[0]) && canPreviewMember(context.nodes[0].mime),
+    exec: async context => { await transferMember(stateFor(context.view)!, context.nodes[0], true); return null },
+  })
+  registerOwnAction({
     id: 'archive-tools-native-download', displayName: () => tr('Download'), iconSvgInline: () => archiveIcon,
     order: -90, default: DefaultType.DEFAULT,
     enabled: context => isArchiveView(context.view) && context.nodes.length === 1 && context.nodes[0].type === 'file' && snapshots.has(context.nodes[0]),
-    exec: async context => { downloadMember(stateFor(context.view)!, context.nodes[0]); return null },
+    exec: async context => { await transferMember(stateFor(context.view)!, context.nodes[0], false); return null },
   })
   registerOwnAction({
     id: 'archive-tools-native-extract', displayName: () => tr('Extract selected'), iconSvgInline: () => archiveIcon, order: 10,

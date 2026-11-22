@@ -2,11 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { FilePickerClosed, getFilePickerBuilder } from '@nextcloud/dialogs'
 import { Permission } from '@nextcloud/files'
-import { getRequestToken } from '@nextcloud/auth'
 import { loadState } from '@nextcloud/initial-state'
 import { n, t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
 import { api, ApiError, errorMessage, isAborted } from './api.ts'
+import { canPreviewMember, downloadArchiveMember, previewArchiveMember } from './member-transfer.ts'
 import { archiveFormats } from './archive-format-capabilities.ts'
 import { archiveBaseName, archiveFormatLabel, supportedArchiveName } from './archive-formats.ts'
 import { compactSelection, directoryEntries, jobProgress, selectedFileCount, toggleArchiveSelection } from './selection.ts'
@@ -31,6 +31,13 @@ const loading = ref(false)
 const actionBusy = ref(false)
 const error = ref('')
 const notice = ref('')
+const memberTransfers = ref(new Map<string, string>())
+const memberStatus = computed(() => [...memberTransfers.value.values()].at(-1) ?? '')
+let memberLifetime = new AbortController()
+watch(sourceId, () => {
+  memberLifetime.abort()
+  memberLifetime = new AbortController()
+})
 const mounts = ref<Mount[]>([])
 const jobs = ref<Job[]>([])
 const listBusy = ref(false)
@@ -227,23 +234,26 @@ function enterDirectory(path: string): void {
   search.value = ''
 }
 
-function download(entry: ArchiveEntry): void {
-  if (!sourceId.value || entry.type !== 'file') return
+async function transferMember(entry: ArchiveEntry, preview = false): Promise<void> {
+  if (!sourceId.value || !info.value || entry.type !== 'file') return
   if (info.value?.encrypted && !password.value) { void openDialog('password'); return }
-  // A native form streams large attachments without buffering the full member
-  // in a browser Blob, and keeps the archive password out of the URL.
-  const form = document.createElement('form')
-  form.method = 'POST'
-  form.action = generateUrl('/apps/archive_tools/archives/' + encodeURIComponent(sourceId.value) + '/download')
-  form.target = '_blank'
-  form.hidden = true
-  for (const [name, value] of Object.entries({ member: entry.path, password: password.value, expectedEtag: info.value?.sourceEtag ?? '', requesttoken: getRequestToken() || '' })) {
-    const input = document.createElement('input')
-    input.type = 'hidden'; input.name = name; input.value = value; form.appendChild(input)
+  const request = {
+    sourceId: sourceId.value, member: entry.path, expectedEtag: info.value.sourceEtag,
+    password: password.value, signal: memberLifetime.signal,
   }
-  document.body.appendChild(form)
-  form.submit()
-  form.remove()
+  const key = JSON.stringify([request.sourceId, request.expectedEtag, preview, entry.path])
+  if (memberTransfers.value.has(key)) return
+  memberTransfers.value.set(key, preview
+    ? tr('Opening {name}…', { name: basename(entry.path) })
+    : tr('Preparing {name} for download…', { name: basename(entry.path) }))
+  try {
+    if (preview) await previewArchiveMember(request, entry.previewMime!, request.sourceId + '/' + entry.path)
+    else await downloadArchiveMember(request)
+  } catch (failure) {
+    if (!isAborted(failure)) error.value = errorMessage(failure)
+  } finally {
+    memberTransfers.value.delete(key)
+  }
 }
 
 async function extract(): Promise<void> {
@@ -405,6 +415,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   inspectRequest?.abort()
   collectionRequest?.abort()
+  memberLifetime.abort()
   clearInterval(timer)
   password.value = ''
   passwordDraft.value = ''
@@ -457,6 +468,7 @@ onBeforeUnmount(() => {
             <span v-if="selection.size" class="at-selection-count">{{ n('archive_tools', '%n file selected', '%n files selected', selectionCount) }}</span>
             <button v-if="selection.size" class="at-text-button" @click="selection = new Set()">{{ tr('Clear selection') }}</button>
           </div>
+          <div v-if="memberStatus" class="at-message at-notice" role="status"><span>{{ memberStatus }}</span></div>
           <nav class="at-breadcrumbs" :aria-label="tr('Archive path')">
             <button @click="enterDirectory('')">{{ tr('Archive root') }}</button>
             <template v-for="crumb in breadcrumbs" :key="crumb.path"><span aria-hidden="true">/</span><button @click="enterDirectory(crumb.path)">{{ crumb.name }}</button></template>
@@ -468,9 +480,9 @@ onBeforeUnmount(() => {
               <tbody>
                 <tr v-for="entry in visibleEntries" :key="entry.path">
                   <td><input type="checkbox" :aria-label="tr('Select {name}', { name: basename(entry.path) })" :checked="selection.has(entry.path)" :indeterminate="partialSelection(entry)" @change="toggleSelection(entry.path)"></td>
-                  <td><button v-if="entry.type === 'dir'" class="at-entry" @click="enterDirectory(entry.path)"><span class="at-folder" aria-hidden="true">▰</span>{{ search ? entry.path : basename(entry.path) }}</button><span v-else class="at-entry"><span class="at-file" aria-hidden="true">▤</span>{{ search ? entry.path : basename(entry.path) }}</span></td>
+                  <td><button v-if="entry.type === 'dir'" class="at-entry" @click="enterDirectory(entry.path)"><span class="at-folder" aria-hidden="true">▰</span>{{ search ? entry.path : basename(entry.path) }}</button><button v-else-if="canPreviewMember(entry.previewMime)" class="at-entry" @click="transferMember(entry, true)"><span class="at-file" aria-hidden="true">▤</span>{{ search ? entry.path : basename(entry.path) }}</button><span v-else class="at-entry"><span class="at-file" aria-hidden="true">▤</span>{{ search ? entry.path : basename(entry.path) }}</span></td>
                   <td class="at-size-column">{{ entry.type === 'file' ? bytes(entry.size) : '—' }}</td>
-                  <td class="at-action-column"><button v-if="entry.type === 'file'" :aria-label="tr('Download {name}', { name: basename(entry.path) })" @click="download(entry)">{{ tr('Download') }}</button></td>
+                  <td class="at-action-column"><button v-if="entry.type === 'file'" :aria-label="tr('Download {name}', { name: basename(entry.path) })" @click="transferMember(entry)">{{ tr('Download') }}</button></td>
                 </tr>
                 <tr v-if="visibleEntries.length === 0"><td colspan="4" class="at-table-empty">{{ tr('This folder is empty.') }}</td></tr>
               </tbody>

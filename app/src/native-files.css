@@ -4,9 +4,9 @@
 .archive-tools-files-toolbar button, .archive-tools-files-toolbar a { margin: 0; }
 .archive-tools-files-toolbar a { padding: 8px; text-decoration: underline; }
 
-.archive-tools-files-loading:empty { display: none; }
+:is(.archive-tools-files-loading, .archive-tools-files-transfer):empty { display: none; }
 
-.archive-tools-files-loading:not(:empty) {
+:is(.archive-tools-files-loading, .archive-tools-files-transfer):not(:empty) {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -14,7 +14,7 @@
   color: var(--color-main-text);
 }
 
-.archive-tools-files-loading::before {
+:is(.archive-tools-files-loading, .archive-tools-files-transfer)::before {
   content: '';
   flex: 0 0 18px;
   height: 18px;
@@ -30,5 +30,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .archive-tools-files-loading::before { animation: none; }
+  :is(.archive-tools-files-loading, .archive-tools-files-transfer)::before { animation: none; }
 }

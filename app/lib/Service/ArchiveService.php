@@ -10,13 +10,26 @@ use OCA\ArchiveTools\Archive\ZipReader;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
+use OCP\Files\IMimeTypeDetector;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
 use OCP\Lock\ILockingProvider;
 
 final class ArchiveService {
-    public function __construct(private IRootFolder $root, private ArchiveReader $reader, private MountRepository $mounts) {}
+    private const PREVIEW_TYPES = [
+        'image/avif', 'image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp',
+        'application/pdf',
+        'audio/flac', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-wav',
+        'video/mp4', 'video/ogg', 'video/quicktime', 'video/webm',
+    ];
+
+    public function __construct(private IRootFolder $root, private ArchiveReader $reader, private MountRepository $mounts, private IMimeTypeDetector $mimeTypes) {}
+
+    public function previewMime(string $member): ?string {
+        $mime = $this->mimeTypes->detectPath($member);
+        return in_array($mime, self::PREVIEW_TYPES, true) ? $mime : null;
+    }
 
     public function node(string $owner, int $id): Node {
         foreach ($this->root->getUserFolder($owner)->getById($id) as $node) {
@@ -79,7 +92,7 @@ final class ArchiveService {
             if ($password !== null && $password !== '') { $this->probePassword($localPath, $index['entries'], $password); }
             $entries = [];
             foreach ($index['entries'] as $path => $entry) {
-                $entries[] = ['path' => (string)$path, 'type' => $entry['type'], 'size' => $entry['size'], 'mtime' => $entry['mtime'], 'encrypted' => $entry['encrypted']];
+                $entries[] = $this->listedEntry((string)$path, $entry);
             }
             return ['sourceId' => $sourceId, 'sourceName' => $source->getName(), 'parentId' => $source->getParent()->getId(), 'sourceEtag' => $sourceEtag,
                 'format' => $index['format'], 'fileCount' => $index['fileCount'], 'directoryCount' => $index['directoryCount'],
@@ -134,8 +147,16 @@ final class ArchiveService {
     }
 
     private function directoryItem(string $path, array $entry): array {
-        return ['path' => $path, 'type' => $entry['type'], 'size' => $entry['size'],
-            'mtime' => $entry['mtime'], 'encrypted' => $entry['encrypted'], 'renderIndex' => $entry['renderIndex']];
+        return $this->listedEntry($path, $entry) + ['renderIndex' => $entry['renderIndex']];
+    }
+
+    private function listedEntry(string $path, array $entry): array {
+        $item = ['path' => $path, 'type' => $entry['type'], 'size' => $entry['size'],
+            'mtime' => $entry['mtime'], 'encrypted' => $entry['encrypted']];
+        if ($entry['type'] === 'file' && ($mime = $this->previewMime($path)) !== null) {
+            $item['previewMime'] = $mime;
+        }
+        return $item;
     }
 
     public function probePassword(string $path, array $entries, #[\SensitiveParameter] ?string $password): void {

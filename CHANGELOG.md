@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0-beta.7
+
+- Show when Archive Tools is preparing a file from an archive for download. Hand the transfer over to the browser once the file starts streaming.
+- Open supported images, PDFs, audio and video in Nextcloud Viewer from the archive file list. Keep Download available in the file menu.
+
 ## 0.5.0-beta.6
 
 - Use Nextcloud's public cache and search interfaces for archive connections. Keep WebDAV paths and file IDs stable and hide cached entries when access to the source is lost.

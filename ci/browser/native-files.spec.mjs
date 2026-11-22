@@ -78,13 +78,26 @@ test('native archive navigation, reload, literal names, download and return', as
   await expect(row(page, 'literal.txt')).toBeVisible()
   await page.goBack()
   await expect(row(page, 'README.txt')).toBeVisible()
+  let finishDownload
+  const waitForDownload = new Promise(resolve => { finishDownload = resolve })
+  await page.route('**' + archiveEndpoint + '/download', async route => {
+    await waitForDownload
+    await route.continue()
+  })
   const downloadPromise = page.waitForEvent('download', { timeout: 20_000 })
   await openRow(page, 'README.txt')
+  const transferStatus = page.locator('[data-archive-transfer]')
+  try {
+    await expect(transferStatus).toHaveText('Preparing README.txt for download…')
+  } finally {
+    finishDownload()
+  }
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe('README.txt')
   const chunks = []
   for await (const part of await download.createReadStream()) chunks.push(part)
   expect(Buffer.concat(chunks).toString('utf8')).toBe('Archive Tools browser fixture\n')
+  await expect(transferStatus).toBeHidden()
   expect(new URL(page.url()).pathname).toContain(nativeView)
   await page.screenshot({ path: join(fixture.outputDirectory, 'native-files.png') })
   await page.getByRole('button', { name: 'Back to Files', exact: true }).click()
@@ -92,6 +105,83 @@ test('native archive navigation, reload, literal names, download and return', as
   expect(currentDir(page)).toBe('/CI Archives')
   expect(new URL(page.url()).searchParams.has('openfile')).toBe(false)
   expect(fullInspections).toBe(0)
+})
+
+test('archive images, PDFs and video open in Nextcloud Viewer', async ({ page, context }) => {
+  await openRow(page, 'Browser.zip')
+  const isPreview = response => /\/apps\/archive_tools\/preview\/[a-f0-9]{48}$/.test(response.url())
+  const imageName = 'Preview #%.png'
+  const imageResponse = page.waitForResponse(isPreview)
+  await openRow(page, imageName)
+  const image = await imageResponse
+  expect(image.status()).toBe(200)
+  expect(image.headers()['content-type']).toBe('image/png')
+  const imageElement = page.locator('#viewer img').filter({ visible: true }).first()
+  await expect(imageElement).toBeVisible()
+  await expect.poll(() => imageElement.evaluate(element => element.naturalWidth)).toBe(1)
+
+  const bytes = await image.body()
+  const range = await context.request.get(image.url(), { headers: { Range: 'bytes=3-7' } })
+  expect(range.status()).toBe(206)
+  expect(range.headers()['content-range']).toBe('bytes 3-7/' + bytes.length)
+  expect(await range.body()).toEqual(bytes.subarray(3, 8))
+  const invalidRange = await context.request.get(image.url(), { headers: { Range: 'bytes=' + bytes.length + '-' } })
+  expect(invalidRange.status()).toBe(416)
+  expect(invalidRange.headers()['content-range']).toBe('bytes */' + bytes.length)
+  const head = await context.request.head(image.url())
+  expect(head.status()).toBe(200)
+  expect(head.headers()['content-length']).toBe(String(bytes.length))
+  expect((await head.body()).length).toBe(0)
+  await page.keyboard.press('Escape')
+  await expect(imageElement).toBeHidden()
+
+  const downloadPromise = page.waitForEvent('download')
+  await row(page, imageName).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Download', exact: true }).click()
+  expect((await downloadPromise).suggestedFilename()).toBe(imageName)
+
+  const pdfResponse = page.waitForResponse(response => isPreview(response)
+    && response.headers()['content-type'] === 'application/pdf')
+  await openRow(page, 'Preview #%.pdf')
+  expect((await pdfResponse).ok()).toBe(true)
+  await expect(page.frameLocator('#viewer iframe').locator('.page[data-page-number="1"]')).toBeVisible()
+  await page.locator('#viewer').getByRole('button', { name: 'Close', exact: true }).click()
+
+  const videoResponse = page.waitForResponse(response => isPreview(response)
+    && response.headers()['content-type'] === 'video/webm')
+  await openRow(page, 'Preview.webm')
+  const videoSource = await videoResponse
+  expect(videoSource.ok()).toBe(true)
+  const video = page.locator('#viewer video')
+  await expect(video).toBeVisible()
+  await expect.poll(() => video.evaluate(element => element.videoWidth)).toBe(8)
+  await video.evaluate(async element => {
+    element.muted = true
+    await element.play()
+  })
+  await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0.1)
+  await video.evaluate(element => {
+    element.pause()
+    element.currentTime = 3.5
+  })
+  await expect.poll(() => video.evaluate(element => !element.seeking && element.currentTime === 3.5)).toBe(true)
+  const wholeVideo = await context.request.get(videoSource.url())
+  const videoTail = await context.request.get(videoSource.url(), { headers: { Range: 'bytes=-32' } })
+  expect(videoTail.status()).toBe(206)
+  expect(await videoTail.body()).toEqual((await wholeVideo.body()).subarray(-32))
+})
+
+test('archive download failure clears its preparation status', async ({ page }) => {
+  await openRow(page, 'Browser.zip')
+  const response = page.waitForResponse(value => value.url().endsWith('/archives/' + fixture.sourceId + '/download'))
+  await page.route('**/archives/' + fixture.sourceId + '/download', route => route.fulfill({
+    status: 409,
+    json: { message: 'The source archive has changed.' },
+  }))
+  await openRow(page, 'README.txt')
+  expect((await response).status()).toBe(409)
+  await expect(page.getByText('The source archive has changed.', { exact: true })).toBeVisible()
+  await expect(page.locator('[data-archive-transfer]')).toBeHidden()
 })
 
 test('leaving a loading archive restores the regular file list', async ({ page }) => {

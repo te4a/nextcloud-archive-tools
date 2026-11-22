@@ -360,5 +360,12 @@ OC.L10N.register("archive_tools", {
     "An archive member path is too long to connect this archive. Open the archive to browse its contents.": "Архив нельзя подключить из-за слишком длинного пути к одному из файлов. Откройте архив для просмотра его содержимого.",
     "Invalid archive cache location.": "Некорректное расположение кэша архива.",
     "Invalid shared archive cache path.": "Некорректный путь в общем кэше архивов.",
-    "The legacy archive cache identity changed during cleanup.": "Идентификатор старого кэша архива изменился во время очистки."
+    "The legacy archive cache identity changed during cleanup.": "Идентификатор старого кэша архива изменился во время очистки.",
+    "Preparing {name} for download…": "Подготовка файла «{name}» к скачиванию…",
+    "Preparing the download took too long. Try again.": "Подготовка к скачиванию заняла слишком много времени. Попробуйте ещё раз.",
+    "Opening {name}…": "Открытие файла «{name}»…",
+    "Open in viewer": "Открыть в просмотрщике",
+    "This file type cannot be previewed.": "Этот тип файла нельзя открыть в просмотрщике.",
+    "This preview has expired. Open the file again.": "Срок просмотра истёк. Откройте файл заново.",
+    "The archive member could not be read.": "Не удалось прочитать файл из архива."
 }, "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);");

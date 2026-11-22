@@ -356,5 +356,12 @@ OC.L10N.register("archive_tools", {
     "An archive member path is too long to connect this archive. Open the archive to browse its contents.": "An archive member path is too long to connect this archive. Open the archive to browse its contents.",
     "Invalid archive cache location.": "Invalid archive cache location.",
     "Invalid shared archive cache path.": "Invalid shared archive cache path.",
-    "The legacy archive cache identity changed during cleanup.": "The legacy archive cache identity changed during cleanup."
+    "The legacy archive cache identity changed during cleanup.": "The legacy archive cache identity changed during cleanup.",
+    "Preparing {name} for download…": "Preparing {name} for download…",
+    "Preparing the download took too long. Try again.": "Preparing the download took too long. Try again.",
+    "Opening {name}…": "Opening {name}…",
+    "Open in viewer": "Open in viewer",
+    "This file type cannot be previewed.": "This file type cannot be previewed.",
+    "This preview has expired. Open the file again.": "This preview has expired. Open the file again.",
+    "The archive member could not be read.": "The archive member could not be read."
 }, "nplurals=2; plural=(n != 1);");

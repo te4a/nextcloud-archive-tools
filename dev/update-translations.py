@@ -8,6 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 L10N = ROOT / 'app' / 'l10n'
 RU_PLURAL = 'nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);'
 PAIRS = '''The archive changed. Open it again before continuing. => Архив изменился. Откройте его заново перед продолжением.
+Preparing {name} for download… => Подготовка файла «{name}» к скачиванию…
+Preparing the download took too long. Try again. => Подготовка к скачиванию заняла слишком много времени. Попробуйте ещё раз.
+Opening {name}… => Открытие файла «{name}»…
+Open in viewer => Открыть в просмотрщике
+This file type cannot be previewed. => Этот тип файла нельзя открыть в просмотрщике.
+This preview has expired. Open the file again. => Срок просмотра истёк. Откройте файл заново.
+The archive member could not be read. => Не удалось прочитать файл из архива.
 An explicit valid task owner is required. => Необходимо явно указать допустимого владельца заданий.
 Archive Tools resource admission is unavailable for this database. => Ограничение ресурсов Archive Tools недоступно для этой базы данных.
 Archive Tools resource usage could not be verified. => Не удалось проверить использование ресурсов Archive Tools.
