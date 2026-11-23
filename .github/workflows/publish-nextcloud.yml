@@ -159,6 +159,7 @@ jobs:
   install-test:
     name: Install signed package on Nextcloud ${{ matrix.nextcloud }}
     needs: [source, package]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.package.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
