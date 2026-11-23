@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0-beta.9
+
+- Offer Open for files with a registered Nextcloud Viewer handler and for supported nested archives. Clicking a file without a handler downloads it.
+- Open XLSX files in read-only mode when Euro-Office is configured to handle the format. Keep Download available in the file menu.
+
 ## 0.5.0-beta.8
 
 - Open files from archives with the default Nextcloud application. Present the selected file as a private, temporary, read-only file so apps such as Euro-Office can open spreadsheets.

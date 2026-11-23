@@ -45,13 +45,20 @@ export async function materializeArchiveMember({ sourceId, member, expectedEtag,
   })
 }
 
-export function canPreviewMember(mime?: string): boolean {
+export function hasViewerHandler(mime?: string): boolean {
   const nextcloudViewer = viewer()
   if (!mime || typeof nextcloudViewer?.open !== 'function') return false
-  if (mime === 'application/pdf' && nextcloudViewer.availableHandlers) {
-    return nextcloudViewer.availableHandlers.some(handler => handler.id === 'pdf')
+  return !!nextcloudViewer.mimetypes?.some(type => type === mime || type === mime.split('/')[0])
+}
+
+export function canPreviewMember(mime?: string): boolean {
+  if (mime === 'application/pdf') {
+    const nextcloudViewer = viewer()
+    if (nextcloudViewer?.availableHandlers) {
+      return typeof nextcloudViewer.open === 'function' && nextcloudViewer.availableHandlers.some(handler => handler.id === 'pdf')
+    }
   }
-  return nextcloudViewer.mimetypes?.includes(mime) || nextcloudViewer.mimetypes?.includes(mime.split('/')[0])
+  return hasViewerHandler(mime)
 }
 
 export async function previewArchiveMember(request: ArchiveMemberRequest, mime: string, fileId: number | string): Promise<void> {

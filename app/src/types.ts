@@ -11,6 +11,7 @@ export interface ArchiveEntry {
   size: number
   mtime: number
   encrypted: boolean
+  mime?: string
   previewMime?: string
 }
 

@@ -28,7 +28,10 @@ final class ArchiveService {
     public function __construct(private IRootFolder $root, private ArchiveReader $reader, private MountRepository $mounts, private IMimeTypeDetector $mimeTypes) {}
 
     public function previewMime(string $member): ?string {
-        $mime = $this->mimeTypes->detectPath($member);
+        return $this->inlinePreviewMime($this->mimeTypes->detectPath($member));
+    }
+
+    private function inlinePreviewMime(string $mime): ?string {
         return in_array($mime, self::PREVIEW_TYPES, true) ? $mime : null;
     }
 
@@ -174,8 +177,12 @@ final class ArchiveService {
     private function listedEntry(string $path, array $entry): array {
         $item = ['path' => $path, 'type' => $entry['type'], 'size' => $entry['size'],
             'mtime' => $entry['mtime'], 'encrypted' => $entry['encrypted']];
-        if ($entry['type'] === 'file' && ($mime = $this->previewMime($path)) !== null) {
-            $item['previewMime'] = $mime;
+        if ($entry['type'] === 'file') {
+            $mime = $this->mimeTypes->detectPath($path);
+            $item['mime'] = $mime;
+            if (($previewMime = $this->inlinePreviewMime($mime)) !== null) {
+                $item['previewMime'] = $previewMime;
+            }
         }
         return $item;
     }

@@ -111,6 +111,30 @@ test('native archive navigation, reload, literal names, download and return', as
   expect(fullInspections).toBe(0)
 })
 
+test('a file without a handler offers Download and downloads on click', async ({ page }) => {
+  await openRow(page, 'Browser.zip')
+  const name = 'Unsupported.archive-test-data'
+  const file = row(page, name)
+  await expect(file.locator('[data-cy-files-list-row-name-link]')).toHaveAccessibleName('Download: ' + name)
+  await file.click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Download', exact: true })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Open', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+
+  const openRequests = []
+  page.on('request', request => {
+    if (request.url().endsWith('/open-member')) openRequests.push(request)
+  })
+  const download = page.waitForEvent('download')
+  await openRow(page, name)
+  const result = await download
+  expect(result.suggestedFilename()).toBe(name)
+  const chunks = []
+  for await (const part of await result.createReadStream()) chunks.push(part)
+  expect(Buffer.concat(chunks).toString()).toBe('No registered viewer\n')
+  expect(openRequests).toHaveLength(0)
+})
+
 test('a nested ZIP opens in Files and returns to its parent archive', async ({ page }) => {
   await openRow(page, 'Browser.zip')
   await openRow(page, 'Nested Юникод')

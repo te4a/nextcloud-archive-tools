@@ -76,6 +76,7 @@ def create_fixture(runner) -> Path:
             archive.writestr('Знаки %2F #?/', b'')
             archive.writestr('Знаки %2F #?/literal.txt', b'literal percent path\n')
             archive.writestr('README.txt', b'Archive Tools browser fixture\n')
+            archive.writestr('Unsupported.archive-test-data', b'No registered viewer\n')
             archive.writestr('Preview #%.png', preview_png())
             archive.writestr('Preview #%.pdf', preview_pdf())
             archive.writestr('Preview.webm', PREVIEW_WEBM)

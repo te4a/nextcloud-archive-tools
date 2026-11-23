@@ -8,7 +8,7 @@ import type { ActionContext, IFileAction, IFileListAction, IFolder, INode, IView
 import { t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
 import { api, ApiError, errorMessage, isAborted } from './api.ts'
-import { canPreviewMember, downloadArchiveMember, materializeArchiveMember, previewArchiveMember } from './member-transfer.ts'
+import { canPreviewMember, downloadArchiveMember, hasViewerHandler, materializeArchiveMember, previewArchiveMember } from './member-transfer.ts'
 import { archiveFormats } from './archive-format-capabilities.ts'
 import { supportedArchiveName } from './archive-formats.ts'
 import {
@@ -27,7 +27,7 @@ interface FilesRouter {
   query: FilesReturnRoute['query']
   goToRoute(name: string | null, params: Record<string, string>, query?: FilesReturnRoute['query'], replace?: boolean): Promise<unknown>
 }
-interface ArchiveSnapshot { sourceId: string; etag: string; member: string; type: 'file' | 'dir'; generation: number }
+interface ArchiveSnapshot { sourceId: string; etag: string; member: string; type: 'file' | 'dir'; generation: number; previewMime?: string }
 interface FullArchiveListing {
   kind: 'full'
   info: ArchiveInfo
@@ -163,8 +163,11 @@ function archiveNode(state: ArchiveViewState, entry?: ArchiveEntry): INode {
   }
   const node = !entry || entry.type === 'dir'
     ? new ArchiveFolder(data, member, info.sourceName)
-    : new ArchiveFile({ ...data, mime: entry.previewMime ?? 'application/octet-stream' }, member, info.sourceName)
-  snapshots.set(node, { sourceId: state.sourceId, etag: info.sourceEtag, member, type: entry?.type ?? 'dir', generation: state.generation })
+    : new ArchiveFile({ ...data, mime: entry.mime ?? entry.previewMime ?? 'application/octet-stream' }, member, info.sourceName)
+  snapshots.set(node, {
+    sourceId: state.sourceId, etag: info.sourceEtag, member, type: entry?.type ?? 'dir',
+    generation: state.generation, previewMime: entry?.previewMime,
+  })
   return node
 }
 
@@ -556,8 +559,9 @@ async function transferMember(state: ArchiveViewState, node: INode, open: boolea
       await downloadArchiveMember(request)
       return
     }
-    if (canPreviewMember(node.mime)) {
-      await previewArchiveMember(request, node.mime, node.id!)
+    const previewMime = snapshots.get(node)?.previewMime
+    if (previewMime && canPreviewMember(previewMime)) {
+      await previewArchiveMember(request, previewMime, node.id!)
       return
     }
     const opened = await materializeArchiveMember(request)
@@ -614,12 +618,13 @@ export function initializeNativeArchives(): void {
     id: 'archive-tools-native-preview', displayName: () => t('files', 'Open'), iconSvgInline: () => archiveIcon,
     order: -100, default: DefaultType.DEFAULT,
     enabled: context => isArchiveView(context.view) && context.nodes.length === 1 && context.nodes[0].type === 'file'
-      && snapshots.has(context.nodes[0]),
+      && snapshots.has(context.nodes[0])
+      && (supportedArchiveName(context.nodes[0].basename, archiveFormats) || hasViewerHandler(context.nodes[0].mime)),
     exec: async context => { await transferMember(stateFor(context.view)!, context.nodes[0], true); return null },
   })
   registerOwnAction({
     id: 'archive-tools-native-download', displayName: () => tr('Download'), iconSvgInline: () => archiveIcon,
-    order: -90,
+    order: -90, default: DefaultType.DEFAULT,
     enabled: context => isArchiveView(context.view) && context.nodes.length === 1 && context.nodes[0].type === 'file' && snapshots.has(context.nodes[0]),
     exec: async context => { await transferMember(stateFor(context.view)!, context.nodes[0], false); return null },
   })
