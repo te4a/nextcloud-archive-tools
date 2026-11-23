@@ -1,4 +1,5 @@
 name: Publish Archive Tools to Nextcloud
+run-name: ${{ inputs.verify_only && 'Verify' || 'Publish' }} Archive Tools ${{ inputs.tag }}
 
 on:
   workflow_dispatch:
@@ -7,12 +8,16 @@ on:
         description: Existing release tag, for example v0.5.0-beta.8
         required: true
         type: string
+      verify_only:
+        description: Check the signing key and App Store access without publishing
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: archive-tools-nextcloud-publication
+  group: archive-tools-nextcloud-${{ inputs.verify_only && 'verification' || 'publication' }}
   cancel-in-progress: false
 
 env:
@@ -69,6 +74,7 @@ jobs:
 
   validate:
     name: Validate the exact tagged source
+    if: ${{ !inputs.verify_only }}
     needs: source
     uses: ./.github/workflows/release-validation.yml
     with:
@@ -77,6 +83,10 @@ jobs:
   package:
     name: Sign and package the release
     needs: [source, validate]
+    if: >-
+      ${{ !cancelled() && needs.source.result == 'success' &&
+          (needs.validate.result == 'success' ||
+           (inputs.verify_only && needs.validate.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     environment: nextcloud-app-store
@@ -177,8 +187,38 @@ jobs:
           python3 dev/verify-store-install.py --image "$image" \
             --package "dist/$ARCHIVE" --signature "dist/$ARCHIVE.sig.base64"
 
+  verify-store-access:
+    name: Verify Archive Tools maintainer access in the App Store
+    if: inputs.verify_only
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: nextcloud-app-store
+    permissions: {}
+    steps:
+      - name: Check the token with a read-only maintainer request
+        shell: bash
+        env:
+          APPSTORE_TOKEN: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN }}
+        run: |
+          if [[ -z "$APPSTORE_TOKEN" ]]; then
+            echo 'Add NEXTCLOUD_APPSTORE_TOKEN to the nextcloud-app-store environment.' >&2
+            exit 1
+          fi
+          status=$(curl --silent --show-error --proto '=https' --max-time 60 \
+            --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Token $APPSTORE_TOKEN" \
+            https://apps.nextcloud.com/api/v1/apps/archive_tools/downloads)
+          case "$status" in
+            200) echo 'The token has maintainer access to Archive Tools in the Nextcloud App Store.' >> "$GITHUB_STEP_SUMMARY" ;;
+            401) echo 'The Nextcloud App Store did not accept the token.' >&2; exit 1 ;;
+            403) echo 'The token does not have maintainer access to Archive Tools.' >&2; exit 1 ;;
+            *) echo "Could not verify the token (HTTP $status)." >&2; exit 1 ;;
+          esac
+
   publish:
     name: Publish to GitHub Releases and the Nextcloud App Store
+    if: ${{ !inputs.verify_only }}
     needs: [source, package, install-test]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

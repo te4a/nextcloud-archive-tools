@@ -43,6 +43,8 @@ Push a version tag for a commit on `main`. The tag, `app/appinfo/info.xml` and `
 
 The workflow validates and tests the exact tagged commit, signs the application tree and release archive, and tests installation of the signed archive on Nextcloud 34 and 35. It verifies the public GitHub download before submitting its URL and signature to the App Store. Tags with `-alpha.N`, `-beta.N` or `-rc.N` publish as prereleases. A tag such as `v0.5.0` publishes a stable release.
 
+To check the secrets without publishing, run the workflow with an existing tag and enable **verify_only**. The workflow signs the package, tests installation on Nextcloud 34 and 35, and checks App Store maintainer access with a read-only API request.
+
 If submitting to the App Store fails after the GitHub Release is live, use **Re-run failed jobs**. The publish job uses the retained signed artifact and compares existing GitHub assets byte for byte. It stops on a mismatch. App Store acceptance is recorded in the run summary. The update catalog may take longer to refresh.
 
 ## Building and signing the exact artifact
