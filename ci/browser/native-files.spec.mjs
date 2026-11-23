@@ -7,6 +7,10 @@ const nativeView = '/archive-tools-' + fixture.sourceId
 const row = (page, name) => page.locator('[data-cy-files-list-row][data-cy-files-list-row-name=' + JSON.stringify(name) + ']')
 const openRow = (page, name) => row(page, name).locator('[data-cy-files-list-row-name-link]').click()
 const currentDir = page => new URL(page.url()).searchParams.get('dir') || '/'
+async function downloadRow(page, name) {
+  await row(page, name).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Download', exact: true }).click()
+}
 
 test.beforeEach(async ({ page, context }) => {
   // This browser is unrelated to the user's browser and cannot reach a remote origin.
@@ -85,7 +89,7 @@ test('native archive navigation, reload, literal names, download and return', as
     await route.continue()
   })
   const downloadPromise = page.waitForEvent('download', { timeout: 20_000 })
-  await openRow(page, 'README.txt')
+  await downloadRow(page, 'README.txt')
   const transferStatus = page.locator('[data-archive-transfer]')
   try {
     await expect(transferStatus).toHaveText('Preparing README.txt for download…')
@@ -105,6 +109,30 @@ test('native archive navigation, reload, literal names, download and return', as
   expect(currentDir(page)).toBe('/CI Archives')
   expect(new URL(page.url()).searchParams.has('openfile')).toBe(false)
   expect(fullInspections).toBe(0)
+})
+
+test('a nested ZIP opens in Files and returns to its parent archive', async ({ page }) => {
+  await openRow(page, 'Browser.zip')
+  await openRow(page, 'Nested Юникод')
+  const materialized = page.waitForResponse(response => response.url().endsWith('/archives/' + fixture.sourceId + '/open-member'))
+  await openRow(page, 'Inner.zip')
+  const response = await materialized
+  expect(response.status()).toBe(200)
+  const { fileId } = await response.json()
+  await expect(page).toHaveURL(url => url.pathname.endsWith('/archive-tools-' + fileId))
+  await openRow(page, 'deep')
+  await expect(row(page, 'inside.txt')).toBeVisible()
+  await page.reload()
+  await expect(row(page, 'inside.txt')).toBeVisible()
+  const download = page.waitForEvent('download')
+  await downloadRow(page, 'inside.txt')
+  const chunks = []
+  for await (const part of await (await download).createReadStream()) chunks.push(part)
+  expect(Buffer.concat(chunks).toString()).toBe('Nested archive fixture\n')
+  await page.getByRole('button', { name: 'Back to Files', exact: true }).click()
+  await expect(page).toHaveURL(url => url.pathname.split('/').includes(nativeView.slice(1)))
+  expect(currentDir(page)).toBe('/Nested Юникод')
+  await expect(row(page, 'Inner.zip')).toBeVisible()
 })
 
 test('archive images, PDFs and video open in Nextcloud Viewer', async ({ page, context }) => {
@@ -171,6 +199,49 @@ test('archive images, PDFs and video open in Nextcloud Viewer', async ({ page, c
   expect(await videoTail.body()).toEqual((await wholeVideo.body()).subarray(-32))
 })
 
+test('archive PDFs use the bundled viewer when another app handles PDF by default', async ({ page }) => {
+  await page.route(/\/apps\/files_pdfviewer\/js\/files_pdfviewer-main\.js(?:\?|$)/, async route => {
+    const response = await route.fetch()
+    expect(response.ok()).toBe(true)
+    const competingHandler = `
+      OCA.Viewer.registerHandler({
+        id: 'ci-competing-pdf',
+        mimes: ['application/pdf'],
+        component: {
+          name: 'CiCompetingPdfViewer',
+          render(h) { return h('div', 'Competing PDF handler') },
+        },
+      }),
+    `
+    const script = await response.text()
+    const pdfRegistration = /OCA\.Viewer\.registerHandler\(\{id:(['"])pdf\1/
+    expect(pdfRegistration.test(script), 'The PDF Viewer script registers the bundled PDF handler').toBe(true)
+    await route.fulfill({
+      contentType: 'application/javascript',
+      body: script.replace(pdfRegistration, match => competingHandler + match),
+    })
+  })
+  await page.goto('/index.php/apps/files/files/' + fixture.folderId + '?dir=' + encodeURIComponent('/CI Archives'))
+  await expect.poll(() => page.evaluate(() => window.OCA?.Viewer?.availableHandlers?.map(handler => handler.id) ?? []))
+    .toEqual(expect.arrayContaining(['ci-competing-pdf', 'pdf']))
+
+  await page.evaluate(() => {
+    const fileInfo = {
+      filename: '/ci-default-handler.pdf', basename: 'ci-default-handler.pdf', fileid: 1,
+      mime: 'application/pdf', hasPreview: false, permissions: 'R',
+    }
+    window.OCA.Viewer.open({ fileInfo, list: [fileInfo], enableSidebar: false })
+  })
+  const competingViewer = page.getByText('Competing PDF handler', { exact: true })
+  await expect(competingViewer).toBeVisible()
+  await page.locator('#viewer').getByRole('button', { name: 'Close', exact: true }).click()
+
+  await openRow(page, 'Browser.zip')
+  await openRow(page, 'Preview #%.pdf')
+  await expect(page.frameLocator('#viewer iframe').locator('.page[data-page-number="1"]')).toBeVisible()
+  await expect(competingViewer).toBeHidden()
+})
+
 test('archive download failure clears its preparation status', async ({ page }) => {
   await openRow(page, 'Browser.zip')
   const response = page.waitForResponse(value => value.url().endsWith('/archives/' + fixture.sourceId + '/download'))
@@ -178,7 +249,7 @@ test('archive download failure clears its preparation status', async ({ page }) 
     status: 409,
     json: { message: 'The source archive has changed.' },
   }))
-  await openRow(page, 'README.txt')
+  await downloadRow(page, 'README.txt')
   expect((await response).status()).toBe(409)
   await expect(page.getByText('The source archive has changed.', { exact: true })).toBeVisible()
   await expect(page.locator('[data-archive-transfer]')).toBeHidden()

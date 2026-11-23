@@ -467,6 +467,9 @@ final class ArchiveStorage extends Common {
             if (!$this->isCurrentMount($current)) {
                 throw new \RuntimeException('The archive connection changed.');
             }
+            if ((int)($current['preview_depth'] ?? 0) > 0 && $current['created_by'] !== $this->viewer) {
+                throw new \RuntimeException('This temporary archive file belongs to another user.');
+            }
 
             $folder = $this->rootFolder->getUserFolder($this->viewer);
             $parentReadable = false;

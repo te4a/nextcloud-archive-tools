@@ -7,6 +7,7 @@ use OCA\ArchiveTools\Archive\ArchiveReader;
 use OCA\ArchiveTools\Archive\ArchivePasswordRequiredException;
 use OCA\ArchiveTools\Archive\OperationBudget;
 use OCA\ArchiveTools\Archive\ZipReader;
+use OCA\ArchiveTools\Mount\MountProvider;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -38,11 +39,15 @@ final class ArchiveService {
         throw new NotFoundException('File not found.');
     }
 
-    public function source(string $owner, int $id): File {
+    public function source(string $owner, int $id, bool $allowMounted = false): File {
         $node = $this->node($owner, $id);
         if (!$node instanceof File) { throw new \InvalidArgumentException('Select an archive file.'); }
-        $this->checkBackgroundStorage($node);
+        if (!$allowMounted || !$this->isMountedArchive($node)) { $this->checkBackgroundStorage($node); }
         return $node;
+    }
+
+    private function isMountedArchive(Node $node): bool {
+        return $node->getMountPoint()->getMountProvider() === MountProvider::class;
     }
 
     public function destination(string $owner, int $id): Folder {
@@ -54,7 +59,7 @@ final class ArchiveService {
     }
 
     public function checkBackgroundStorage(Node $node): void {
-        if ($node->getMountPoint()->getMountProvider() === \OCA\ArchiveTools\Mount\MountProvider::class) {
+        if ($this->isMountedArchive($node)) {
             throw new \InvalidArgumentException('Processing an archive inside another mounted archive is not available. Extract the inner archive first.');
         }
         if ($node->getMountPoint()->getOption('authenticated', false)) {
@@ -78,7 +83,7 @@ final class ArchiveService {
     }
 
     public function inspect(string $owner, int $sourceId, #[\SensitiveParameter] ?string $password = null, ?string $knownEtag = null): array {
-        $source = $this->source($owner, $sourceId);
+        $source = $this->source($owner, $sourceId, allowMounted: true);
         $source->lock(ILockingProvider::LOCK_SHARED);
         $leases = [];
         try {
@@ -95,6 +100,7 @@ final class ArchiveService {
                 $entries[] = $this->listedEntry((string)$path, $entry);
             }
             return ['sourceId' => $sourceId, 'sourceName' => $source->getName(), 'parentId' => $source->getParent()->getId(), 'sourceEtag' => $sourceEtag,
+                'mountedSource' => $this->isMountedArchive($source),
                 'format' => $index['format'], 'fileCount' => $index['fileCount'], 'directoryCount' => $index['directoryCount'],
                 'totalSize' => $index['totalSize'], 'compressedSize' => $index['compressedSize'], 'encrypted' => $index['encrypted'], 'entries' => $entries];
         } finally {
@@ -105,7 +111,7 @@ final class ArchiveService {
 
     public function browseZip(string $owner, int $sourceId, string $directory, #[\SensitiveParameter] ?string $password, ?string $expectedEtag): ?array {
         $budget = new OperationBudget(15);
-        $source = $this->source($owner, $sourceId);
+        $source = $this->source($owner, $sourceId, allowMounted: true);
         $source->lock(ILockingProvider::LOCK_SHARED);
         $leases = [];
         try {
@@ -131,6 +137,7 @@ final class ArchiveService {
                 'sourceName' => $source->getName(),
                 'parentId' => $source->getParent()->getId(),
                 'sourceEtag' => $sourceEtag,
+                'mountedSource' => $this->isMountedArchive($source),
                 'format' => 'zip',
                 'fileCount' => $listing['fileCount'],
                 'directoryCount' => count(array_filter($entries, static fn (array $entry): bool => $entry['type'] === 'dir')),
@@ -148,6 +155,20 @@ final class ArchiveService {
 
     private function directoryItem(string $path, array $entry): array {
         return $this->listedEntry($path, $entry) + ['renderIndex' => $entry['renderIndex']];
+    }
+
+    public function memberIndex(string $localPath, string $member, #[\SensitiveParameter] ?string $password, OperationBudget $budget): array {
+        $parent = dirname($member);
+        $listing = $this->reader->browseZip($localPath, $parent === '.' ? '' : $parent, $password, $budget)
+            ?? $this->reader->inspect($localPath, $password, $budget);
+        $entry = $listing['entries'][$member] ?? null;
+        if (($entry['type'] ?? null) !== 'file') {
+            throw new \InvalidArgumentException('Select a file inside the archive.');
+        }
+        if ($entry['encrypted']) {
+            $this->probePassword($localPath, [$entry], $password);
+        }
+        return ['entries' => [basename($member) => $entry], 'totalSize' => $listing['totalSize']];
     }
 
     private function listedEntry(string $path, array $entry): array {

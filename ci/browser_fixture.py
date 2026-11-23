@@ -66,9 +66,13 @@ def create_fixture(runner) -> Path:
         for folder in ('CI Archives', 'CI Destination'):
             runner.check('browser fixture directory ' + folder, client.dav('MKCOL', folder)[0] == 201)
         output = io.BytesIO()
+        inner = io.BytesIO()
+        with zipfile.ZipFile(inner, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('deep/inside.txt', b'Nested archive fixture\n')
         with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('Nested Юникод/', b'')
             archive.writestr('Nested Юникод/notes.txt', b'nested browser fixture\n')
+            archive.writestr('Nested Юникод/Inner.zip', inner.getvalue())
             archive.writestr('Знаки %2F #?/', b'')
             archive.writestr('Знаки %2F #?/literal.txt', b'literal percent path\n')
             archive.writestr('README.txt', b'Archive Tools browser fixture\n')

@@ -14,6 +14,7 @@ return [
         ['name' => 'archive#inspect', 'url' => '/archives/{sourceId}/inspect', 'verb' => 'POST'],
         ['name' => 'archive#browseZip', 'url' => '/archives/{sourceId}/browse-zip', 'verb' => 'POST'],
         ['name' => 'archive#download', 'url' => '/archives/{sourceId}/download', 'verb' => 'POST'],
+        ['name' => 'member#open', 'url' => '/archives/{sourceId}/open-member', 'verb' => 'POST'],
         ['name' => 'archive#preparePreview', 'url' => '/archives/{sourceId}/preview', 'verb' => 'POST'],
         ['name' => 'archive#preview', 'url' => '/preview/{ticket}', 'verb' => 'GET'],
         ['name' => 'archive#previewHead', 'url' => '/preview/{ticket}', 'verb' => 'HEAD'],

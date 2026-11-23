@@ -363,5 +363,7 @@ OC.L10N.register("archive_tools", {
     "Open in viewer": "Open in viewer",
     "This file type cannot be previewed.": "This file type cannot be previewed.",
     "This preview has expired. Open the file again.": "This preview has expired. Open the file again.",
-    "The archive member could not be read.": "The archive member could not be read."
+    "The archive member could not be read.": "The archive member could not be read.",
+    "The maximum number of nested archive levels has been reached.": "The maximum number of nested archive levels has been reached.",
+    "This temporary archive file belongs to another user.": "This temporary archive file belongs to another user."
 }, "nplurals=2; plural=(n != 1);");

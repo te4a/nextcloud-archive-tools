@@ -8,7 +8,9 @@ import type { ActionContext, IFileAction, IFileListAction, IFolder, INode, IView
 import { t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
 import { api, ApiError, errorMessage, isAborted } from './api.ts'
-import { canPreviewMember, downloadArchiveMember, previewArchiveMember } from './member-transfer.ts'
+import { canPreviewMember, downloadArchiveMember, materializeArchiveMember, previewArchiveMember } from './member-transfer.ts'
+import { archiveFormats } from './archive-format-capabilities.ts'
+import { supportedArchiveName } from './archive-formats.ts'
 import {
   ARCHIVE_NODE_MARKER, archiveDirectories, archiveEtagIdentity, archiveRenderIds, archiveSourceId, archiveViewId, decodeArchiveDirectory,
   encodeArchivePath, lockedArchiveRenderId, readFilesReturnRoute, sanitizeFilesReturnRoute, zipRenderId,
@@ -140,7 +142,7 @@ function rememberReturn(sourceId: string, route: FilesReturnRoute): void {
 }
 
 function storedReturn(sourceId: string): FilesReturnRoute | null {
-  try { return readFilesReturnRoute(sessionStorage.getItem('archive-tools:return:' + sourceId)) } catch { return null }
+  try { return readFilesReturnRoute(sessionStorage.getItem('archive-tools:return:' + sourceId), sourceId) } catch { return null }
 }
 
 function archiveNode(state: ArchiveViewState, entry?: ArchiveEntry): INode {
@@ -365,23 +367,27 @@ export async function connectNativeArchive(context: ActionContext): Promise<void
 export async function openNativeArchive(context: ActionContext, action: 'open' | 'extract'): Promise<void> {
   const sourceId = context.nodes[0]?.id
   if (!sourceId || isArchiveView(context.view) || context.nodes.some(isArchiveNode)) return
+  const currentRouter = router()
+  await enterArchive(sourceId, context.nodes[0].basename, {
+    params: { ...currentRouter.params, view: context.view.id, fileid: sourceId },
+    query: { ...currentRouter.query, dir: context.folder.path },
+  }, action)
+}
+
+async function enterArchive(sourceId: string, sourceName: string, returnRoute: FilesReturnRoute, action: 'open' | 'extract'): Promise<void> {
   const state = ensureView(sourceId)
   state.lifetime.abort()
   state.lifetime = new AbortController()
   state.closing = false
   state.password = ''; state.listing = undefined; state.invalid = false; state.locked = false
   state.sourceEtag = undefined; state.validatedDirectory = undefined
-  state.sourceName = context.nodes[0].basename
+  state.sourceName = sourceName
   state.passwordError = undefined
   state.generation++
-  const currentRouter = router()
-  state.returnRoute = sanitizeFilesReturnRoute({
-    params: { ...currentRouter.params, view: context.view.id, fileid: sourceId },
-    query: { ...currentRouter.query, dir: context.folder.path },
-  })
+  state.returnRoute = sanitizeFilesReturnRoute(returnRoute)
   rememberReturn(sourceId, state.returnRoute)
   state.pendingAction = action === 'open' ? null : action
-  await currentRouter.goToRoute('filelist', { view: state.view.id }, { dir: '/' })
+  await router().goToRoute('filelist', { view: state.view.id }, { dir: '/' })
 }
 
 async function returnToFiles(state: ArchiveViewState): Promise<void> {
@@ -391,6 +397,8 @@ async function returnToFiles(state: ArchiveViewState): Promise<void> {
   state.password = ''; state.lifetime.abort(); state.pendingAction = null
   if (state.returnRoute) {
     const route = sanitizeFilesReturnRoute(state.returnRoute)
+    const parent = archiveSourceId(route.params.view)
+    if (parent) ensureView(parent)
     await router().goToRoute('filelist', route.params, route.query)
   } else if (state.listing) {
     window.location.assign(generateUrl('/f/' + state.listing.info.parentId))
@@ -402,7 +410,7 @@ async function returnToFiles(state: ArchiveViewState): Promise<void> {
 async function showDialog(state: ArchiveViewState, kind: 'password' | 'extract' | 'connect', members: string[] = []): Promise<void> {
   if (!dialogHost?.isConnected || headerView !== state.view.id || !current(state) || state.prompting) return
   const info = state.listing?.info
-  if (kind !== 'password' && !info) return
+  if (kind !== 'password' && (!info || info.mountedSource)) return
   const lifetime = state.lifetime
   const wasLocked = state.locked
   const host = dialogHost
@@ -482,6 +490,7 @@ function updateHeader(state: ArchiveViewState): void {
   if (title) title.textContent = state.listing?.info.sourceName || state.sourceName || tr('Archive viewer')
   for (const button of headerElement.querySelectorAll<HTMLButtonElement>('button[data-archive-action]')) {
     button.disabled = !!loading || state.prompting || state.invalid || !state.listing
+    button.hidden = !!state.listing?.info.mountedSource
     if (button.dataset.archiveAction === 'password') {
       button.hidden = !state.listing?.info.encrypted && !state.locked
       button.disabled = !!loading || state.prompting || state.invalid || (!state.listing?.info.encrypted && !state.locked)
@@ -528,7 +537,7 @@ function renderHeader(element: HTMLElement, _folder: IFolder, view: IView): void
   if (state) { updateHeader(state); void promptPending(state) }
 }
 
-async function transferMember(state: ArchiveViewState, node: INode, preview: boolean): Promise<void> {
+async function transferMember(state: ArchiveViewState, node: INode, open: boolean): Promise<void> {
   let key: string | undefined
   try {
     const [member] = selectedMembers(state, [node])
@@ -536,15 +545,32 @@ async function transferMember(state: ArchiveViewState, node: INode, preview: boo
       sourceId: state.sourceId, member, expectedEtag: state.listing!.info.sourceEtag,
       password: state.password, signal: state.lifetime.signal,
     }
-    const operationKey = state.generation + ':' + (preview ? 'preview:' : 'download:') + member
+    const operationKey = state.generation + ':' + (open ? 'open:' : 'download:') + member
     if (state.memberTransfers.has(operationKey)) return
     key = operationKey
-    state.memberTransfers.set(key, preview
+    state.memberTransfers.set(key, open
       ? tr('Opening {name}…', { name: node.basename })
       : tr('Preparing {name} for download…', { name: node.basename }))
     updateHeader(state)
-    if (preview) await previewArchiveMember(request, node.mime, node.id!)
-    else await downloadArchiveMember(request)
+    if (!open) {
+      await downloadArchiveMember(request)
+      return
+    }
+    if (canPreviewMember(node.mime)) {
+      await previewArchiveMember(request, node.mime, node.id!)
+      return
+    }
+    const opened = await materializeArchiveMember(request)
+    request.signal.throwIfAborted()
+    if (supportedArchiveName(node.basename, archiveFormats)) {
+      const currentRouter = router()
+      await enterArchive(opened.fileId, node.basename, {
+        params: { ...currentRouter.params, view: state.view.id, fileid: node.id! },
+        query: currentRouter.query,
+      }, 'open')
+    } else {
+      window.location.assign(opened.url)
+    }
   } catch (error) {
     if (!isAborted(error)) showError(errorMessage(error))
   } finally {
@@ -585,21 +611,22 @@ export function initializeNativeArchives(): void {
     },
   })
   registerOwnAction({
-    id: 'archive-tools-native-preview', displayName: () => tr('Open in viewer'), iconSvgInline: () => archiveIcon,
+    id: 'archive-tools-native-preview', displayName: () => t('files', 'Open'), iconSvgInline: () => archiveIcon,
     order: -100, default: DefaultType.DEFAULT,
     enabled: context => isArchiveView(context.view) && context.nodes.length === 1 && context.nodes[0].type === 'file'
-      && snapshots.has(context.nodes[0]) && canPreviewMember(context.nodes[0].mime),
+      && snapshots.has(context.nodes[0]),
     exec: async context => { await transferMember(stateFor(context.view)!, context.nodes[0], true); return null },
   })
   registerOwnAction({
     id: 'archive-tools-native-download', displayName: () => tr('Download'), iconSvgInline: () => archiveIcon,
-    order: -90, default: DefaultType.DEFAULT,
+    order: -90,
     enabled: context => isArchiveView(context.view) && context.nodes.length === 1 && context.nodes[0].type === 'file' && snapshots.has(context.nodes[0]),
     exec: async context => { await transferMember(stateFor(context.view)!, context.nodes[0], false); return null },
   })
   registerOwnAction({
     id: 'archive-tools-native-extract', displayName: () => tr('Extract selected'), iconSvgInline: () => archiveIcon, order: 10,
-    enabled: context => isArchiveView(context.view) && context.nodes.length > 0 && context.nodes.every(node => snapshots.has(node)),
+    enabled: context => isArchiveView(context.view) && !stateFor(context.view)?.listing?.info.mountedSource
+      && context.nodes.length > 0 && context.nodes.every(node => snapshots.has(node)),
     exec: async context => { const state = stateFor(context.view)!; await showDialog(state, 'extract', selectedMembers(state, context.nodes)); return null },
     execBatch: async context => { const state = stateFor(context.view)!; await showDialog(state, 'extract', selectedMembers(state, context.nodes)); return context.nodes.map(() => null) },
   })

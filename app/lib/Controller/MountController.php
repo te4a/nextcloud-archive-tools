@@ -113,6 +113,9 @@ final class MountController extends Controller {
     public function index(): JSONResponse {
         $result = [];
         foreach ($this->mounts->findAll() as $row) {
+            if ((int)($row['preview_depth'] ?? 0) > 0) {
+                continue;
+            }
             try {
                 $parent = $this->nodeById((int)$row['parent_id']);
             } catch (NotFoundException) {
@@ -285,7 +288,7 @@ final class MountController extends Controller {
         }
         try {
             $visible = $this->mounts->find($id);
-            if ($visible === null) {
+            if ($visible === null || (int)($visible['preview_depth'] ?? 0) > 0) {
                 return new JSONResponse(['message' => $this->l->t('Connection not found.')], 404);
             }
             $parent = $this->nodeById((int)$visible['parent_id']);
@@ -295,7 +298,7 @@ final class MountController extends Controller {
             }
             return $this->mounts->withExclusive($id, function () use ($id, $pinned): JSONResponse {
                 $row = $this->mounts->find($id);
-                if ($row === null) {
+                if ($row === null || (int)($row['preview_depth'] ?? 0) > 0) {
                     return new JSONResponse(['message' => $this->l->t('Connection not found.')], 404);
                 }
                 $parent = $this->nodeById((int)$row['parent_id']);
@@ -327,7 +330,7 @@ final class MountController extends Controller {
         try {
             $result = $this->mounts->withExclusive($id, function () use ($id): int|JSONResponse {
                 $row = $this->mounts->find($id);
-                if ($row === null) {
+                if ($row === null || (int)($row['preview_depth'] ?? 0) > 0) {
                     throw new NotFoundException('Connection not found.');
                 }
                 $parent = $this->nodeById((int)$row['parent_id']);

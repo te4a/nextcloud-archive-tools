@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-beta.8
+
+- Open files from archives with the default Nextcloud application. Present the selected file as a private, temporary, read-only file so apps such as Euro-Office can open spreadsheets.
+- Browse supported nested archives in Nextcloud Files and return to the original folder in the outer archive.
+- Open archived PDFs with the Nextcloud PDF viewer when another app is configured as the default PDF handler.
+
 ## 0.5.0-beta.7
 
 - Show when Archive Tools is preparing a file from an archive for download. Hand the transfer over to the browser once the file starts streaming.

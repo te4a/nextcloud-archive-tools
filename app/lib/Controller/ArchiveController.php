@@ -117,7 +117,7 @@ final class ArchiveController extends Controller {
                 return new JSONResponse(['message' => $this->l->t('This file type cannot be previewed.')], 415);
             }
             $owner = $this->owner();
-            $this->archives->currentEtag($this->archives->source($owner, $sourceId), $expectedEtag);
+            $this->archives->currentEtag($this->archives->source($owner, $sourceId, allowMounted: true), $expectedEtag);
             $now = time();
             $tickets = array_filter(
                 $this->browserSession->get(self::PREVIEWS) ?? [],
@@ -174,7 +174,7 @@ final class ArchiveController extends Controller {
         try {
             AdmissionService::validatePassword($password);
             $activity = $this->lifecycle->enter();
-            $source = $this->archives->source($this->owner(), $sourceId);
+            $source = $this->archives->source($this->owner(), $sourceId, allowMounted: true);
             $source->lock(ILockingProvider::LOCK_SHARED);
             $locked = true;
             $this->archives->currentEtag($source, $expectedEtag);

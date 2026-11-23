@@ -58,8 +58,9 @@ final class IdleCleanupService {
                         return null;
                     }
                     $missing = $this->mounts->isSourceMissing((int)$mount['source_id']);
-                    $idle = $minutes > 0 && !(bool)$mount['pinned']
-                        && (int)$mount['last_access'] <= $now - $minutes * 60;
+                    $idleMinutes = (int)($mount['preview_depth'] ?? 0) > 0 ? MountRepository::PREVIEW_IDLE_MINUTES : $minutes;
+                    $idle = $idleMinutes > 0 && !(bool)$mount['pinned']
+                        && (int)$mount['last_access'] <= $now - $idleMinutes * 60;
                     if (!$missing && !$idle) {
                         return null;
                     }

@@ -29,11 +29,13 @@ final class MountInvalidator {
             $users[$user->getUID()] = $user;
         }
         foreach ($users as $user) {
-            // Persist the new projection immediately. A MOVE may complete a
-            // filesystem setup after firing its invalidation event, restoring
-            // the core cache marker before the next request.
-            $this->cache->registerMounts($user, $this->provider->getMountsForUser($user, $this->factory), [MountProvider::class]);
-            $this->events->dispatchTyped(new InvalidateMountCacheEvent($user));
+            $this->invalidateUser($user);
         }
+    }
+
+    public function invalidateUser(IUser $user): void {
+        // Persist the new projection immediately, before the next filesystem setup.
+        $this->cache->registerMounts($user, $this->provider->getMountsForUser($user, $this->factory), [MountProvider::class]);
+        $this->events->dispatchTyped(new InvalidateMountCacheEvent($user));
     }
 }

@@ -22,19 +22,36 @@ interface ViewerFile {
   permissions: string
 }
 
+interface ViewerOptions {
+  fileInfo: ViewerFile
+  list: ViewerFile[]
+  enableSidebar: boolean
+}
+
 interface Viewer {
   mimetypes: string[]
-  open: (options: { fileInfo: ViewerFile; list: ViewerFile[]; enableSidebar: boolean }) => void
+  availableHandlers?: { id: string }[]
+  open: (options: ViewerOptions) => void
+  openWith?: (handlerId: string, options: ViewerOptions) => void
 }
 
 function viewer(): Viewer | undefined {
   return (window as Window & { OCA?: { Viewer?: Viewer } }).OCA?.Viewer
 }
 
+export async function materializeArchiveMember({ sourceId, member, expectedEtag, password, signal }: ArchiveMemberRequest): Promise<{ fileId: string; url: string }> {
+  return api('/archives/' + encodeURIComponent(sourceId) + '/open-member', {
+    method: 'POST', body: JSON.stringify({ member, expectedEtag, password }), signal,
+  })
+}
+
 export function canPreviewMember(mime?: string): boolean {
   const nextcloudViewer = viewer()
-  return !!mime && typeof nextcloudViewer?.open === 'function'
-    && (nextcloudViewer.mimetypes?.includes(mime) || nextcloudViewer.mimetypes?.includes(mime.split('/')[0]))
+  if (!mime || typeof nextcloudViewer?.open !== 'function') return false
+  if (mime === 'application/pdf' && nextcloudViewer.availableHandlers) {
+    return nextcloudViewer.availableHandlers.some(handler => handler.id === 'pdf')
+  }
+  return nextcloudViewer.mimetypes?.includes(mime) || nextcloudViewer.mimetypes?.includes(mime.split('/')[0])
 }
 
 export async function previewArchiveMember(request: ArchiveMemberRequest, mime: string, fileId: number | string): Promise<void> {
@@ -52,7 +69,13 @@ export async function previewArchiveMember(request: ArchiveMemberRequest, mime: 
     source, filename: source, basename: member.split('/').pop()!, fileid: fileId,
     mime, etag: expectedEtag, hasPreview: false, permissions: 'R',
   }
-  nextcloudViewer.open({ fileInfo, list: [fileInfo], enableSidebar: false })
+  const options = { fileInfo, list: [fileInfo], enableSidebar: false }
+  if (mime === 'application/pdf' && typeof nextcloudViewer.openWith === 'function') {
+    // The bundled PDF handler can read the ticket URL. Office handlers need a Files ID.
+    nextcloudViewer.openWith('pdf', options)
+  } else {
+    nextcloudViewer.open(options)
+  }
 }
 
 /** The browser owns the attachment. A short-lived cookie acknowledges streaming headers. */

@@ -10,6 +10,7 @@ use OCP\IDBConnection;
 use OCP\Lock\ILockingProvider;
 
 final class MountRepository {
+    public const PREVIEW_IDLE_MINUTES = 30;
     private array $touched = [];
     private array $exclusiveLocks = [];
     private array $activeLeases = [];
@@ -28,7 +29,8 @@ final class MountRepository {
         // Projections and lifecycle scans need identity, never every archive's
         // potentially large index or encrypted credential at once.
         $qb->select('m.id', 'm.source_id', 'm.parent_id', 'm.mount_name', 'm.created_by',
-            'm.pinned', 'm.last_access', 'm.source_etag')->from('archive_tools_mounts', 'm')->orderBy('m.id');
+            'm.pinned', 'm.last_access', 'm.source_etag', 'm.preview_depth')
+            ->from('archive_tools_mounts', 'm')->orderBy('m.id');
         $this->joinCacheRoute($qb);
         return $qb->executeQuery()->fetchAllAssociative();
     }
@@ -40,6 +42,17 @@ final class MountRepository {
         $this->joinCacheRoute($qb);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row === false ? null : $row;
+    }
+
+    public function findPreview(string $owner, int $sourceId, string $name): ?int {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('id')->from('archive_tools_mounts')
+            ->where($qb->expr()->eq('created_by', $qb->createNamedParameter($owner)))
+            ->andWhere($qb->expr()->eq('source_id', $qb->createNamedParameter($sourceId)))
+            ->andWhere($qb->expr()->eq('mount_name', $qb->createNamedParameter($name)))
+            ->andWhere($qb->expr()->gt('preview_depth', $qb->createNamedParameter(0)));
+        $id = $qb->executeQuery()->fetchOne();
+        return $id === false ? null : (int)$id;
     }
 
     private function joinCacheRoute(IQueryBuilder $qb): void {

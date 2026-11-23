@@ -111,13 +111,15 @@ export function sanitizeFilesReturnRoute(route: FilesReturnRoute): FilesReturnRo
 }
 
 /** Never deserialize an arbitrary redirect URL or any archive password. */
-export function readFilesReturnRoute(serialized: string | null): FilesReturnRoute | null {
+export function readFilesReturnRoute(serialized: string | null, nestedSource?: string): FilesReturnRoute | null {
   if (!serialized) return null
   try {
     const route = JSON.parse(serialized)
     if (!route || typeof route !== 'object' || !route.params || !route.query
-      || typeof route.params.view !== 'string' || archiveSourceId(route.params.view)
+      || typeof route.params.view !== 'string'
       || !/^[a-zA-Z0-9_-]+$/.test(route.params.view)) return null
+    const parentArchive = archiveSourceId(route.params.view)
+    if (parentArchive && (!nestedSource || parentArchive === nestedSource)) return null
     if (Object.values(route.params).some(value => typeof value !== 'string')) return null
     if (Object.values(route.query).some(value => value !== null && typeof value !== 'string'
       && (!Array.isArray(value) || value.some(item => item !== null && typeof item !== 'string')))) return null

@@ -368,7 +368,9 @@
         "Open in viewer": "Открыть в просмотрщике",
         "This file type cannot be previewed.": "Этот тип файла нельзя открыть в просмотрщике.",
         "This preview has expired. Open the file again.": "Срок просмотра истёк. Откройте файл заново.",
-        "The archive member could not be read.": "Не удалось прочитать файл из архива."
+        "The archive member could not be read.": "Не удалось прочитать файл из архива.",
+        "The maximum number of nested archive levels has been reached.": "Достигнут предел вложенности архивов.",
+        "This temporary archive file belongs to another user.": "Этот временный файл архива принадлежит другому пользователю."
     },
     "pluralForm": "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);"
 }

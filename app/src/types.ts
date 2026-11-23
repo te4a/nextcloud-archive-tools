@@ -19,6 +19,7 @@ export interface ArchiveInfo {
   sourceName: string
   parentId: number
   sourceEtag: string
+  mountedSource?: boolean
   format: string
   fileCount: number
   directoryCount: number

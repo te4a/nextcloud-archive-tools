@@ -115,6 +115,9 @@ final class ArchiveMountPoint implements IMountPoint, IMovableMount {
     }
 
     public function getOption($name, $default): mixed {
+        if ($name === 'archive_tools_preview_depth') {
+            return (int)($this->storageParameters['mount']['preview_depth'] ?? 0);
+        }
         return self::OPTIONS[$name] ?? $default;
     }
 

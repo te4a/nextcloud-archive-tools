@@ -56,14 +56,21 @@ final class MountProvider implements IMountProvider {
             }
 
             try {
-                // This cache lookup needs no File object and does not recursively
-                // initialise the share provider, which core assembles last.
-                $parents = $this->mountCache->getMountsForFileId((int)$row['parent_id'], $user->getUID());
-                foreach ($parents as $parent) {
-                    if ($parent->getMountProvider() === self::class) {
+                if ((int)($row['preview_depth'] ?? 0) > 0) {
+                    if ($row['created_by'] !== $user->getUID()) {
                         continue;
                     }
-                    $parentPath = rtrim($parent->getPath(), '/');
+                    $paths = [$userRoot];
+                } else {
+                    // This cache lookup lets the core assemble the share provider last.
+                    $paths = [];
+                    foreach ($this->mountCache->getMountsForFileId((int)$row['parent_id'], $user->getUID()) as $parent) {
+                        if ($parent->getMountProvider() !== self::class) {
+                            $paths[] = rtrim($parent->getPath(), '/');
+                        }
+                    }
+                }
+                foreach ($paths as $parentPath) {
                     if ($parentPath !== $userRoot && !str_starts_with($parentPath, $userRoot . '/')) {
                         continue;
                     }
