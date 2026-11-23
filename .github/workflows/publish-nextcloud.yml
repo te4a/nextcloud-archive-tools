@@ -1,0 +1,276 @@
+name: Publish Archive Tools to Nextcloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.5.0-beta.8
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-tools-nextcloud-publication
+  cancel-in-progress: false
+
+env:
+  NEXTCLOUD_34_IMAGE: nextcloud:34.0.5-apache@sha256:d8ad0b77c863611b9fab6e72a82a5d35fbcb218b660f9f20fec9941a50806281
+  NEXTCLOUD_35_IMAGE: nextcloud:35.0.2-apache@sha256:786c102155d2717ba0f53a62b3fdd7a1354edc48e800b94dbe32294d9a5752a2
+
+jobs:
+  source:
+    name: Resolve and validate release tag
+    if: github.repository == 'te4a/nextcloud-archive-tools' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      commit: ${{ steps.tag.outputs.commit }}
+      version: ${{ steps.tag.outputs.version }}
+      archive: ${{ steps.tag.outputs.archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require matching metadata at a commit in main
+        id: tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          number='(0|[1-9][0-9]*)'
+          pattern="^v$number\.$number\.$number(-(alpha|beta|rc)\.$number)?$"
+          if [[ ! "$RELEASE_TAG" =~ $pattern ]]; then
+            echo 'Use a version tag such as v0.5.0-beta.8, v0.5.0-rc.1 or v0.5.0.' >&2
+            exit 1
+          fi
+          commit=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          if ! git merge-base --is-ancestor "$commit" "$GITHUB_SHA"; then
+            echo 'The tagged commit must be in the history of main.' >&2
+            exit 1
+          fi
+          version=${RELEASE_TAG#v}
+          git show "$commit:app/appinfo/info.xml" | python3 -c '
+          import sys, xml.etree.ElementTree as ET
+          info = ET.parse(sys.stdin.buffer)
+          if info.findtext("id") != "archive_tools" or info.findtext("version") != sys.argv[1]:
+              sys.exit("The tag must match the Archive Tools app version.")
+          ' "$version"
+          git show "$commit:package.json" | jq --exit-status --arg version "$version" '.version == $version'
+          {
+            echo "tag=$RELEASE_TAG"
+            echo "commit=$commit"
+            echo "version=$version"
+            echo "archive=archive_tools-$version.tar.gz"
+          } >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Validate the exact tagged source
+    needs: source
+    uses: ./.github/workflows/release-validation.yml
+    with:
+      commit: ${{ needs.source.outputs.commit }}
+
+  package:
+    name: Sign and package the release
+    needs: [source, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: nextcloud-app-store
+    outputs:
+      bundle: ${{ steps.bundle.outputs.artifact-id }}
+    env:
+      ARCHIVE: ${{ needs.source.outputs.archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - name: Prepare the release files and issued public certificate
+        id: stage
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          docker pull "$NEXTCLOUD_34_IMAGE"
+          curl --fail --silent --show-error --proto '=https' --max-time 30 \
+            --output "$RUNNER_TEMP/archive_tools.crt" \
+            https://raw.githubusercontent.com/nextcloud/app-certificate-requests/master/archive_tools/archive_tools.crt
+          printf '%s  %s\n' '48383028f8b0c739a3b7c88adeea0699ef2c14623ce727e2cec8f77720a35eee' \
+            "$RUNNER_TEMP/archive_tools.crt" | sha256sum --check
+          stage=$(python3 dev/package.py --prepare | jq --exit-status --raw-output '.stage')
+          echo "path=$stage" >> "$GITHUB_OUTPUT"
+      - name: Sign the application files and final tarball
+        shell: bash
+        env:
+          STAGE: ${{ steps.stage.outputs.path }}
+          NEXTCLOUD_APP_SIGNING_KEY: ${{ secrets.NEXTCLOUD_APP_SIGNING_KEY }}
+        run: |
+          if [[ -z "$NEXTCLOUD_APP_SIGNING_KEY" ]]; then
+            echo 'Add NEXTCLOUD_APP_SIGNING_KEY to the nextcloud-app-store environment.' >&2
+            exit 1
+          fi
+          umask 077
+          key=$(mktemp "$RUNNER_TEMP/archive-tools-key.XXXXXXXX")
+          trap 'rm -f -- "$key"' EXIT
+          printf '%s\n' "$NEXTCLOUD_APP_SIGNING_KEY" > "$key"
+          unset NEXTCLOUD_APP_SIGNING_KEY
+
+          cert="$RUNNER_TEMP/archive_tools.crt"
+          docker run --rm --network none --pull never \
+            --mount "type=bind,source=$STAGE,target=/release" \
+            --mount "type=bind,source=$key,target=/signing/app.key,readonly" \
+            --mount "type=bind,source=$cert,target=/signing/app.crt,readonly" \
+            --entrypoint php "$NEXTCLOUD_34_IMAGE" /usr/src/nextcloud/occ integrity:sign-app \
+            --path=/release --privateKey=/signing/app.key --certificate=/signing/app.crt
+          python3 dev/package.py --stage "$STAGE" --require-signature
+          openssl dgst -sha512 -sign "$key" -out "dist/$ARCHIVE.sig" "dist/$ARCHIVE"
+          rm -f -- "$key"
+          openssl x509 -in "$cert" -pubkey -noout > "$RUNNER_TEMP/archive_tools.pub"
+          openssl dgst -sha512 -verify "$RUNNER_TEMP/archive_tools.pub" \
+            -signature "dist/$ARCHIVE.sig" "dist/$ARCHIVE"
+          openssl base64 -A -in "dist/$ARCHIVE.sig" -out "dist/$ARCHIVE.sig.base64"
+      - name: Retain the exact signed release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: bundle
+        with:
+          name: signed-release-${{ needs.source.outputs.tag }}-${{ github.run_attempt }}
+          path: |
+            dist/${{ needs.source.outputs.archive }}
+            dist/${{ needs.source.outputs.archive }}.sha256
+            dist/${{ needs.source.outputs.archive }}.sig.base64
+          if-no-files-found: error
+          retention-days: 14
+
+  install-test:
+    name: Install signed package on Nextcloud ${{ matrix.nextcloud }}
+    needs: [source, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        nextcloud: ['34', '35']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle }}
+          path: dist
+      - name: Verify installation, native integrity and bundled decoders
+        shell: bash
+        env:
+          NC_MAJOR: ${{ matrix.nextcloud }}
+          ARCHIVE: ${{ needs.source.outputs.archive }}
+        run: |
+          image=$NEXTCLOUD_34_IMAGE
+          if [[ "$NC_MAJOR" == 35 ]]; then image=$NEXTCLOUD_35_IMAGE; fi
+          docker pull "$image"
+          (cd dist && sha256sum --check "$ARCHIVE.sha256")
+          python3 dev/verify-store-install.py --image "$image" \
+            --package "dist/$ARCHIVE" --signature "dist/$ARCHIVE.sig.base64"
+
+  publish:
+    name: Publish to GitHub Releases and the Nextcloud App Store
+    needs: [source, package, install-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: nextcloud-app-store
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.source.outputs.tag }}
+      VERSION: ${{ needs.source.outputs.version }}
+      ARCHIVE: ${{ needs.source.outputs.archive }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.package.outputs.bundle }}
+          path: dist
+      - name: Publish the exact tested files as a GitHub Release
+        id: github-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
+          HAS_APPSTORE_TOKEN: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN != '' }}
+        run: |
+          if [[ "$HAS_APPSTORE_TOKEN" != true ]]; then
+            echo 'Add NEXTCLOUD_APPSTORE_TOKEN to the nextcloud-app-store environment.' >&2
+            exit 1
+          fi
+          ref="refs/tags/$RELEASE_TAG"
+          remote=$(git ls-remote --exit-code "https://github.com/$GH_REPO.git" "$ref" "$ref^{}")
+          commit=$(awk 'NR == 1 || /\^\{\}$/ { commit = $1 } END { print commit }' <<< "$remote")
+          if [[ "$commit" != "$SOURCE_COMMIT" ]]; then
+            echo 'The remote tag no longer points to the validated commit.' >&2
+            exit 1
+          fi
+          (cd dist && sha256sum --check "$ARCHIVE.sha256")
+
+          prerelease=false
+          flags=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease=true
+            flags=(--prerelease --latest=false)
+          fi
+          fields=tagName,isDraft,isPrerelease,assets
+          if ! release=$(gh release view "$RELEASE_TAG" --json "$fields"); then
+            gh release create "$RELEASE_TAG" --verify-tag --draft "${flags[@]}" \
+              --title "Archive Tools $VERSION" \
+              --notes "See the [changelog](https://github.com/$GH_REPO/blob/$RELEASE_TAG/CHANGELOG.md)."
+            release=$(gh release view "$RELEASE_TAG" --json "$fields")
+          fi
+          jq --exit-status --arg tag "$RELEASE_TAG" --argjson prerelease "$prerelease" \
+            '.tagName == $tag and .isPrerelease == $prerelease' <<< "$release" >/dev/null
+          draft=$(jq --raw-output '.isDraft' <<< "$release")
+          downloaded=$(mktemp -d)
+          for asset in "$ARCHIVE" "$ARCHIVE.sha256"; do
+            if ! jq --exit-status --arg name "$asset" '.assets | any(.name == $name)' <<< "$release" >/dev/null; then
+              if [[ "$draft" != true ]]; then
+                echo "Published GitHub Release is missing $asset." >&2
+                exit 1
+              fi
+              gh release upload "$RELEASE_TAG" "dist/$asset"
+            fi
+            gh release download "$RELEASE_TAG" --pattern "$asset" --dir "$downloaded"
+            cmp -- "dist/$asset" "$downloaded/$asset"
+          done
+          if [[ "$draft" == true ]]; then
+            gh release edit "$RELEASE_TAG" --verify-tag --draft=false "${flags[@]}"
+          fi
+          download="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG/$ARCHIVE"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --retry 3 --retry-all-errors --max-time 30 --output "$downloaded/public.tar.gz" "$download"
+          cmp -- "dist/$ARCHIVE" "$downloaded/public.tar.gz"
+          echo "download=$download" >> "$GITHUB_OUTPUT"
+      - name: Submit the verified public download to the Nextcloud App Store
+        shell: bash
+        env:
+          APPSTORE_TOKEN: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN }}
+          DOWNLOAD_URL: ${{ steps.github-release.outputs.download }}
+        run: |
+          request=$(jq --null-input --compact-output --arg download "$DOWNLOAD_URL" \
+            --rawfile signature "dist/$ARCHIVE.sig.base64" \
+            '{download: $download, signature: $signature, nightly: false}')
+          status=$(curl --silent --show-error --proto '=https' --max-time 90 \
+            --output "$RUNNER_TEMP/archive-tools-store-response.json" --write-out '%{http_code}' \
+            --header "Authorization: Token $APPSTORE_TOKEN" --header 'Content-Type: application/json' \
+            --data-binary "$request" https://apps.nextcloud.com/api/v1/apps/releases)
+          if [[ "$status" != 200 && "$status" != 201 ]]; then
+            echo "Nextcloud App Store rejected publication (HTTP $status)." >&2
+            exit 1
+          fi
+          {
+            echo "Published [$RELEASE_TAG on GitHub](https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG)."
+            echo "Nextcloud App Store accepted the release (HTTP $status)."
+            echo '[Archive Tools in the Nextcloud App Store](https://apps.nextcloud.com/apps/archive_tools)'
+          } >> "$GITHUB_STEP_SUMMARY"

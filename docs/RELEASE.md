@@ -28,6 +28,23 @@ The public repository is [te4a/nextcloud-archive-tools](https://github.com/te4a/
 
 Keep signing keys outside published source and artifacts. Obtain an app certificate, sign the final application tree, then create and sign the release archive. Validate and test the exact artifact that will be uploaded. Rebuild and re-sign after any content change.
 
+## Publishing a tag with GitHub Actions
+
+Add these secrets under **Settings → Environments → nextcloud-app-store**. The environment allows deployments from the `main` branch.
+
+| Secret | Value |
+| --- | --- |
+| `NEXTCLOUD_APP_SIGNING_KEY` | The full PEM contents of the existing `archive_tools.key`, including its BEGIN and END lines. This is the private key paired with the issued Archive Tools certificate. |
+| `NEXTCLOUD_APPSTORE_TOKEN` | The API token for the account that owns or maintains Archive Tools in the [Nextcloud App Store](https://apps.nextcloud.com/account/). Paste the token value without the `Token ` prefix. |
+
+The workflow fetches the issued public certificate and verifies its SHA-256. GitHub provides the token used to publish the GitHub Release. Keep the signing key and App Store token out of commits, workflow inputs and release artifacts.
+
+Push a version tag for a commit on `main`. The tag, `app/appinfo/info.xml` and `package.json` must agree on the version. In **Actions → Publish Archive Tools to Nextcloud → Run workflow**, select the `main` branch and enter the tag, for example `v0.5.0-beta.8`.
+
+The workflow validates and tests the exact tagged commit, signs the application tree and release archive, and tests installation of the signed archive on Nextcloud 34 and 35. It verifies the public GitHub download before submitting its URL and signature to the App Store. Tags with `-alpha.N`, `-beta.N` or `-rc.N` publish as prereleases. A tag such as `v0.5.0` publishes a stable release.
+
+If submitting to the App Store fails after the GitHub Release is live, use **Re-run failed jobs**. The publish job uses the retained signed artifact and compares existing GitHub assets byte for byte. It stops on a mismatch. App Store acceptance is recorded in the run summary. The update catalog may take longer to refresh.
+
 ## Building and signing the exact artifact
 
 The runtime package contains compiled assets, PHP, translations, licence texts, release notes and versioned source links. Development dependencies and test fixtures stay in the source repository. Vite generates the bundled dependency notices at `app/js/THIRD_PARTY_LICENSES.md` during the normal build.

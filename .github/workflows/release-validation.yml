@@ -5,12 +5,18 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      commit:
+        description: Exact source commit to validate for publication
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-validation-${{ github.workflow }}-${{ github.ref }}
+  group: release-validation-${{ inputs.commit && github.run_id || github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,6 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.commit || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
@@ -52,6 +59,15 @@ jobs:
           pnpm run typecheck
           node ci/clean-assets.mjs
           pnpm run build
+      - name: Verify that the tested assets match the release tag
+        if: inputs.commit != ''
+        env:
+          SOURCE_COMMIT: ${{ inputs.commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          git diff --exit-code -- app/css app/js ':!app/js/THIRD_PARTY_LICENSES.md'
+          git diff --exit-code --ignore-cr-at-eol -- app/js/THIRD_PARTY_LICENSES.md
+          test -z "$(git ls-files --others --exclude-standard -- app/css app/js)"
       - name: Install pinned browser tooling
         if: matrix.browser
         run: |
