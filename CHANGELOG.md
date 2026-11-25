@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0-beta.10
+## 0.5.0-beta.11
 
 - Browse large 7z archives directly in Nextcloud Files without decoding file contents. Downloading, extraction, and connections still enforce their expanded-size limits.
 - Distinguish a valid 7z or RAR entry above the applicable size limit from malformed size metadata.

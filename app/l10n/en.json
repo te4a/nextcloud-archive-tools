@@ -366,7 +366,12 @@
         "This preview has expired. Open the file again.": "This preview has expired. Open the file again.",
         "The archive member could not be read.": "The archive member could not be read.",
         "The maximum number of nested archive levels has been reached.": "The maximum number of nested archive levels has been reached.",
-        "This temporary archive file belongs to another user.": "This temporary archive file belongs to another user."
+        "This temporary archive file belongs to another user.": "This temporary archive file belongs to another user.",
+        "The owner folder does not match the reserved output.": "The owner folder does not match the reserved output.",
+        "The partial output has no eligible share owner.": "The partial output has no eligible share owner.",
+        "The partial output still exists after deletion.": "The partial output still exists after deletion.",
+        "The shared destination could not be identified for its owner.": "The shared destination could not be identified for its owner.",
+        "The archive exceeds the expanded size limit or reports an invalid size.": "The archive exceeds the expanded size limit or reports an invalid size."
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"
 }

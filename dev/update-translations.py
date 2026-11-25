@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 L10N = ROOT / 'app' / 'l10n'
 RU_PLURAL = 'nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);'
 PAIRS = '''The archive changed. Open it again before continuing. => Архив изменился. Откройте его заново перед продолжением.
+The owner folder does not match the reserved output. => Папка владельца не совпадает с папкой, зарезервированной для распаковки.
+The partial output has no eligible share owner. => Не удалось определить владельца общей папки для отката распаковки.
+The partial output still exists after deletion. => Папка незавершённой распаковки сохранилась после попытки удаления.
+The shared destination could not be identified for its owner. => Не удалось найти общую папку назначения среди файлов владельца.
 Preparing {name} for download… => Подготовка файла «{name}» к скачиванию…
 Preparing the download took too long. Try again. => Подготовка к скачиванию заняла слишком много времени. Попробуйте ещё раз.
 Opening {name}… => Открытие файла «{name}»…

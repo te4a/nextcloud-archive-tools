@@ -369,5 +369,10 @@ OC.L10N.register("archive_tools", {
     "This preview has expired. Open the file again.": "Срок просмотра истёк. Откройте файл заново.",
     "The archive member could not be read.": "Не удалось прочитать файл из архива.",
     "The maximum number of nested archive levels has been reached.": "Достигнут предел вложенности архивов.",
-    "This temporary archive file belongs to another user.": "Этот временный файл архива принадлежит другому пользователю."
+    "This temporary archive file belongs to another user.": "Этот временный файл архива принадлежит другому пользователю.",
+    "The owner folder does not match the reserved output.": "Папка владельца не совпадает с папкой, зарезервированной для распаковки.",
+    "The partial output has no eligible share owner.": "Не удалось определить владельца общей папки для отката распаковки.",
+    "The partial output still exists after deletion.": "Папка незавершённой распаковки сохранилась после попытки удаления.",
+    "The shared destination could not be identified for its owner.": "Не удалось найти общую папку назначения среди файлов владельца.",
+    "The archive exceeds the expanded size limit or reports an invalid size.": "Распакованный архив превышает ограничение размера или содержит неверные сведения о размере."
 }, "nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);");
