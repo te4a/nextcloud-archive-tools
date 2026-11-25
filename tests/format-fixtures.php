@@ -20,7 +20,7 @@ try {
         } else {
             $files = ['helloworld.txt' => "hello libarchive test suite!\n"];
         }
-    } elseif ($action === '7z' || $action === '7z-encrypted') {
+    } elseif (in_array($action, ['7z', '7z-encrypted', '7z-data-encrypted'], true)) {
         $binary = null;
         foreach (['/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7z', '/usr/local/bin/7z'] as $candidate) {
             if (is_file($candidate) && is_executable($candidate)) { $binary = $candidate; break; }
@@ -33,10 +33,10 @@ try {
         $files = ['one.txt' => "one\n", 'nested/два.txt' => "два\n"];
         foreach ($files as $name => $contents) { file_put_contents($workDirectory . '/' . $name, $contents); }
         $command = [$binary, 'a', '-t7z', '-bd', '-bso0', '-bse2'];
-        if ($action === '7z-encrypted') {
+        if ($action !== '7z') {
             $password = 'format-test';
             // This constant is deliberately public fixture data, not a stored secret.
-            array_push($command, '-p' . $password, '-mhe=on');
+            array_push($command, '-p' . $password, $action === '7z-encrypted' ? '-mhe=on' : '-mhe=off');
         }
         array_push($command, '--', $workDirectory . '/fixture.7z', 'one.txt', 'nested/два.txt');
         $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $workDirectory, ['LC_ALL' => 'C.UTF-8', 'LANG' => 'C.UTF-8']);

@@ -136,6 +136,47 @@ def run():
             report.check('shared extracted bytes available to ' + ('owner' if actor is alice else 'recipient'),
                          actor.dav('GET', 'Writable destination/Shared output/private/secret.bin') == (200, b'authenticated content\0\xff'))
 
+        # Recipients may create files in this share but may not update or delete them.
+        shared = 'Create-only destination'
+        existing = shared + '/keep.txt'
+        output = shared + '/Write failure output'
+        expected = b'complete archive entry\n' * 16384
+        original = b'preserve this existing file\n'
+        report.check('create-only destination created', alice.dav('MKCOL', shared)[0] == 201)
+        report.check('pre-existing file uploaded to the share', alice.dav('PUT', existing, data=original)[0] == 201)
+        existing_id = alice.file_id(existing)
+        alice.ocs('POST', payload={'path': '/' + shared, 'shareType': 0, 'shareWith': bob.user, 'permissions': 5})
+        report.check('recipient cannot overwrite or delete existing files',
+                     bob.dav('PUT', existing, data=b'replacement')[0] == 403 and bob.dav('DELETE', existing)[0] == 403)
+        source_path = 'Личные архивы/Write failure.zip'
+        archive = f['zip_bytes']({'nested/payload.bin': expected}, zipfile.ZIP_STORED)
+        report.check('synthetic source for interrupted write uploaded', bob.dav('PUT', source_path, data=archive)[0] == 201)
+        route = f'/archives/{bob.file_id(source_path)}/extract'
+        payload = {'destinationId': bob.file_id(shared), 'folderName': 'Write failure output'}
+        status, interrupted_write = bob.api('POST', route, payload)
+        report.check('recipient can queue extraction into the create-only share', status == 202)
+        write_info = helper('fail-shared-write', interrupted_write['id'])
+        partial = write_info['partialBytes']
+        report.data['interruptedWrite'] = write_info
+        report.check('destination write fails after persisting an exact prefix',
+                     0 < partial < write_info['expectedBytes'] == len(expected)
+                     and write_info['prefixHash'] == hashlib.sha256(expected[:partial]).hexdigest(), json.dumps(write_info))
+        _, failure_state = bob.api('GET', f'/jobs/{interrupted_write["id"]}')
+        report.check('interrupted write fails and removes the output for both accounts',
+                     failure_state['status'] == 'failed' and failure_state['targetId'] is None
+                     and not write_info['outputExists']
+                     and alice.dav('PROPFIND', output)[0] == 404 and bob.dav('PROPFIND', output)[0] == 404,
+                     json.dumps(failure_state))
+        status, retried = bob.api('POST', route, payload)
+        report.check('same destination and name can be queued immediately', status == 202 and retried['id'] != interrupted_write['id'])
+        f['execute_job'](docker, int(retried['id']))
+        _, retry_state = bob.api('GET', f'/jobs/{retried["id"]}')
+        report.check('native retry succeeds without resetting locks', retry_state['status'] == 'succeeded', json.dumps(retry_state))
+        report.check('both accounts read the exact retried file',
+                     all(actor.dav('GET', output + '/nested/payload.bin') == (200, expected) for actor in (alice, bob)))
+        report.check('rollback and retry leave existing file identity and bytes intact',
+                     alice.file_id(existing) == existing_id and alice.dav('GET', existing) == (200, original))
+
         corrupt = bytearray(f['zip_bytes']({'broken.txt': b'checksum payload'}, zipfile.ZIP_STORED))
         corrupt[corrupt.find(b'checksum payload')] ^= 1
         bob.dav('PUT', 'Личные архивы/Повреждённый.zip', data=bytes(corrupt))
@@ -145,7 +186,9 @@ def run():
         f['execute_job'](docker, int(broken['id']))
         _, broken = bob.api('GET', f'/jobs/{broken["id"]}')
         report.check('nested corrupted extraction fails', broken['status'] == 'failed')
-        report.check('nested corrupted output is removed completely', bob.dav('PROPFIND', 'Личные архивы/Незавершённый')[0] == 404)
+        broken_dav = bob.dav('PROPFIND', 'Личные архивы/Незавершённый')[0]
+        report.check('nested corrupted output is removed completely', broken_dav == 404,
+                     json.dumps({'webdavStatus': broken_dav, 'targetId': broken['targetId'], 'message': broken['message']}))
 
         # A stopped worker must not destroy a folder edited after interruption.
         status, interrupted = bob.api('POST', f'/archives/{source}/extract', {

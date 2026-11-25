@@ -11,7 +11,10 @@ use OCA\ArchiveTools\Storage\ExtractionLockStorage;
 use OCP\BackgroundJob\IJobList;
 use OCP\Files\File;
 use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
+use OCP\Files\ISetupManager;
 use OCP\Files\NotFoundException;
+use OCP\Files\Storage\ILockingStorage;
 use OCP\IUserSession;
 use OCP\Lock\ILockingProvider;
 use OCP\Security\ICrypto;
@@ -33,6 +36,8 @@ final class ExtractionService {
         private LoggerInterface $logger,
         private LifecycleService $lifecycle,
         private AdmissionService $admission,
+        private IRootFolder $root,
+        private ISetupManager $filesystems,
     ) {}
 
     public function schedule(string $owner, int $sourceId, ?int $destinationId, string $folderName, array $members, #[\SensitiveParameter] ?string $password, ?string $expectedEtag = null): array {
@@ -163,11 +168,11 @@ final class ExtractionService {
             // rollback. Other requests cannot insert files into partial output.
             $destinationMount = $destination->getMountPoint();
             $destinationStorage = $destinationMount->getStorage();
-            if ($destinationStorage === null) { throw new \RuntimeException('The destination storage is unavailable.'); }
+            if (!$destinationStorage instanceof ILockingStorage) { throw new \RuntimeException('The destination storage is unavailable.'); }
             $destinationPath = $destinationMount->getInternalPath($destination->getPath());
             $destinationStorage->acquireLock($destinationPath, ILockingProvider::LOCK_EXCLUSIVE, $this->locks);
             $destinationLocked = true;
-            $reservationStorage = new ExtractionLockStorage($destinationStorage, $destinationPath);
+            $reservationStorage = new ExtractionLockStorage(['storage' => $destinationStorage, 'parentPath' => $destinationPath]);
             $destinationMount->wrapStorage(static fn () => $reservationStorage);
             if ($destination->nodeExists($row['folder_name'])) { throw new \RuntimeException('The extraction folder already exists. Choose a different name.'); }
             $this->checkCancelled($id);
@@ -260,7 +265,7 @@ final class ExtractionService {
                     $message = 'Extraction stopped, but partial output could not be removed. Review the destination folder.';
                 } else {
                     try {
-                        $output->delete();
+                        $this->removePartialOutput($destination, $output);
                         $output = null;
                     } catch (\Throwable $cleanupError) {
                         $state = 'failed';
@@ -293,6 +298,60 @@ final class ExtractionService {
         }
         try { $this->notifications->jobFinished($row['owner_id'], $id, $row['source_name'], $state, $output?->getId()); }
         catch (\Throwable $error) { $this->logger->warning('An archive job notification could not be delivered.', ['app' => 'archive_tools', 'jobId' => $id, 'exceptionClass' => $error::class]); }
+    }
+
+    /** Called only for the initially empty output created by this job and still exclusively reserved. */
+    private function removePartialOutput(Folder $destination, Folder $output): void {
+        if ($output->isDeletable()) {
+            $output->delete();
+            return;
+        }
+
+        $recipient = $this->session->getUser();
+        $owner = $destination->getOwner();
+        if ($owner === null || $owner->getUID() === $recipient?->getUID()
+            || $owner->getUID() !== $output->getOwner()?->getUID()) {
+            throw new \RuntimeException('The partial output has no eligible share owner.');
+        }
+        $destinationId = $destination->getId();
+        $outputId = $output->getId();
+        $outputName = $output->getName();
+        try {
+            $this->session->setUser($owner);
+            $this->filesystems->setupForUser($owner);
+            $parents = $this->root->getUserFolder($owner->getUID())->getById($destinationId);
+            $parent = $parents[0] ?? null;
+            if (count($parents) !== 1 || !$parent instanceof Folder || $parent->getOwner()?->getUID() !== $owner->getUID()) {
+                throw new \RuntimeException('The shared destination could not be identified for its owner.');
+            }
+            $partial = $parent->get($outputName);
+            $mount = $parent->getMountPoint();
+            $storage = $mount->getStorage();
+            if (!$partial instanceof Folder || $partial->getId() !== $outputId
+                || $partial->getOwner()?->getUID() !== $owner->getUID()
+                || $partial->getMountPoint() !== $mount || $mount === $destination->getMountPoint()
+                || !$storage instanceof ILockingStorage) {
+                throw new \RuntimeException('The owner folder does not match the reserved output.');
+            }
+
+            // A received share's locks resolve to the original storage. Reuse
+            // those locks at their owner paths while deleting this job's output.
+            $path = $mount->getInternalPath($partial->getPath());
+            $reservation = new ExtractionLockStorage(['storage' => $storage, 'parentPath' => $mount->getInternalPath($parent->getPath())]);
+            $reservation->reserve($path);
+            $mount->wrapStorage(static fn () => $reservation);
+            try {
+                $partial->delete();
+                if ($storage->file_exists($path)) {
+                    throw new \RuntimeException('The partial output still exists after deletion.');
+                }
+            } finally {
+                $reservation->deactivate();
+                $mount->wrapStorage(static fn () => $storage);
+            }
+        } finally {
+            $this->session->setUser($recipient);
+        }
     }
 
     private function directory(array &$directories, string $path): Folder {

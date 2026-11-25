@@ -271,7 +271,7 @@
         "The archive contains too many indexed files and directories.": "The archive contains too many indexed files and directories.",
         "The archive could not be read.": "The archive could not be read.",
         "The archive directory reports an invalid size.": "The archive directory reports an invalid size.",
-        "The archive exceeds the expanded size limit or reports an invalid size.": "The archive exceeds the expanded size limit or reports an invalid size.",
+        "The archive exceeds the expanded size limit.": "The archive exceeds the expanded size limit.",
         "The archive exceeds the index filename size limit.": "The archive exceeds the index filename size limit.",
         "The archive is damaged or uses an unsupported compression method.": "The archive is damaged or uses an unsupported compression method.",
         "The archive is not readable.": "The archive is not readable.",

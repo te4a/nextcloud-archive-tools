@@ -1,6 +1,26 @@
 <?php
 declare(strict_types=1);
 
+final class InterruptedArchiveWrite extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            if ($this->params->partialBytes === 0) {
+                $path = $this->params->physicalPath;
+                clearstatcache(true, $path);
+                $size = filesize($path);
+                if ($size > 0 && $size < $this->params->expectedBytes) {
+                    $this->params->partialBytes = $size;
+                    $this->params->prefixHash = hash_file('sha256', $path);
+                    throw new RuntimeException('Synthetic failure writing to shared storage.');
+                }
+            }
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+
 require '/var/www/html/lib/base.php';
 \OC_App::loadApps();
 $action = $argv[1] ?? '';
@@ -114,6 +134,71 @@ if ($action === 'fixture' || $action === 'long-fixture') {
         $prepared = \OC::$server->get(\OCA\ArchiveTools\Notification\Notifier::class)->prepare($notification, 'ru');
         $reply['subject'] = $notificationRow['subject'];
         $reply['localizedSubject'] = $prepared->getParsedSubject();
+    }
+} elseif ($action === 'fail-shared-write') {
+    $id = (int)($argv[3] ?? 0);
+    $row = $jobs->find($id);
+    $member = 'nested/payload.bin';
+    $plan = json_decode((string)($row['plan_json'] ?? ''), true);
+    $expectedBytes = (int)($plan[$member]['size'] ?? 0);
+    if ($row === null || $row['owner_id'] !== $owner || $row['state'] !== 'queued'
+        || $row['folder_name'] !== 'Write failure output' || !str_ends_with($owner, '_bob')
+        || $expectedBytes < 65536) {
+        throw new RuntimeException('Expected a queued write failure fixture.');
+    }
+    $setup = \OCP\Server::get(\OCP\Files\ISetupManager::class);
+    $session = \OCP\Server::get(\OCP\IUserSession::class);
+    $previous = $session->getUser();
+    $fixtureOwner = substr($owner, 0, -3) . 'alice';
+    $dataDirectory = \OCP\Server::get(\OCP\IConfig::class)->getSystemValue('datadirectory');
+    $physicalOutput = $dataDirectory . '/' . $fixtureOwner . '/files/Create-only destination/Write failure output';
+    $fault = (object)['physicalPath' => $physicalOutput . '/' . $member, 'expectedBytes' => $expectedBytes,
+        'partialBytes' => 0, 'prefixHash' => null];
+    try {
+        $setup->tearDown();
+        $session->setUser($user);
+        $setup->setupForUser($user);
+        $root = \OCP\Server::get(\OCP\Files\IRootFolder::class)->getUserFolder($owner);
+        $destination = $root->get('Create-only destination');
+        if (!$destination instanceof \OCP\Files\Folder || $destination->getId() !== (int)$row['destination_id']) {
+            throw new RuntimeException('The job does not target the test share.');
+        }
+        $mount = $destination->getMountPoint();
+        $storage = $mount->getStorage();
+        $target = $mount->getInternalPath($destination->getPath() . '/' . $row['folder_name'] . '/' . $member);
+        if (!stream_filter_register('archive-tools.test.write-failure', InterruptedArchiveWrite::class)) {
+            throw new RuntimeException('Could not register the test stream filter.');
+        }
+        \OCP\Server::get(\OCP\BackgroundJob\IJobList::class)->remove(
+            \OCA\ArchiveTools\BackgroundJob\ExtractJob::class, ['jobId' => $id],
+        );
+        $mount->wrapStorage(static fn () => new class (['storage' => $storage], $target, $fault) extends \OC\Files\Storage\Wrapper\Wrapper {
+            public function __construct(array $parameters, private string $target = '', private ?object $fault = null) {
+                parent::__construct($parameters);
+            }
+
+            public function fopen(string $path, string $mode) {
+                $stream = parent::fopen($path, $mode);
+                if ($path === $this->target && $mode === 'w' && is_resource($stream)
+                    && stream_filter_append($stream, 'archive-tools.test.write-failure', STREAM_FILTER_WRITE, $this->fault) === false) {
+                    fclose($stream);
+                    throw new RuntimeException('Could not attach the test stream filter.');
+                }
+                return $stream;
+            }
+        });
+        try {
+            \OCP\Server::get(\OCA\ArchiveTools\Service\ExtractionService::class)->run($id);
+        } finally {
+            $mount->wrapStorage(static fn () => $storage);
+        }
+        clearstatcache(true, $physicalOutput);
+        $reply = ['partialBytes' => $fault->partialBytes, 'expectedBytes' => $expectedBytes,
+            'prefixHash' => $fault->prefixHash, 'outputExists' => is_dir($physicalOutput)];
+    } finally {
+        $setup->tearDown();
+        $session->setUser($previous);
+        if ($previous !== null) { $setup->setupForUser($previous); }
     }
 } elseif ($action === 'mark-interrupted') {
     $id = (int)($argv[3] ?? 0);

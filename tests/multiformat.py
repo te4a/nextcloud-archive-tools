@@ -69,21 +69,31 @@ def run():
         destination = reader.file_id('')
         source_files = {'one.txt': b'one\n', 'nested/два.txt': 'два\n'.encode(), 'Знаки %2F #?/100%.txt': b'complex name\n'}
         raw = tar_bytes(source_files)
-        fixtures = [('tar', raw, source_files, None), ('tar.gz', gzip.compress(raw), source_files, None),
-                    ('tar.bz2', bz2.compress(raw), source_files, None), ('tar.xz', lzma.compress(raw), source_files, None)]
-        for action, extension in [('7z', '7z'), ('7z-encrypted', '7z'), ('rar', 'rar'), ('rar5', 'rar')]:
+        fixtures = [('tar', raw, source_files, None, False), ('tar.gz', gzip.compress(raw), source_files, None, False),
+                    ('tar.bz2', bz2.compress(raw), source_files, None, False), ('tar.xz', lzma.compress(raw), source_files, None, False)]
+        for action, extension in [('7z', '7z'), ('7z-encrypted', '7z'), ('rar', 'rar'), ('rar5', 'rar'), ('7z-data-encrypted', '7z')]:
             value = json.loads(docker.run(['exec', '-T', '--user', 'www-data', 'nextcloud', 'php',
                                            '/opt/archive-tools-tests/format-fixtures.php', action]))
             files = {name: base64.b64decode(content) for name, content in value['files'].items()}
-            fixtures.append((extension, base64.b64decode(value['base64']), files, value.get('password')))
-        for number, (extension, archive, files, password) in enumerate(fixtures):
+            fixtures.append((extension, base64.b64decode(value['base64']), files, value.get('password'), action == '7z-data-encrypted'))
+        for number, (extension, archive, files, password, readable_headers) in enumerate(fixtures):
             label = str(number) + '-' + extension
             if password:
                 report.secrets.append(password)
             source_path = 'Formats/sample-' + str(number) + '.' + extension
             report.check(label + ' source uploaded', owner.dav('PUT', source_path, data=archive)[0] == 201)
             source = owner.file_id(source_path)
-            if password:
+            if password and readable_headers:
+                wrong = 'incorrect-format-test'
+                for browse_password in (None, wrong):
+                    status, info = reader.api('POST', f'/archives/{source}/inspect', {'password': browse_password})
+                    report.check(label + ' readable headers are listed without checking the member password',
+                                 status == 200 and info.get('encrypted') and info.get('fileCount') == len(files), f'HTTP {status}')
+                status, _ = reader.api('POST', f'/archives/{source}/download', {
+                    'password': wrong, 'member': next(iter(files)), 'expectedEtag': info['sourceEtag'],
+                })
+                report.check(label + ' download still verifies the member password', status == 422, f'HTTP {status}')
+            elif password:
                 status, locked = reader.api('POST', f'/archives/{source}/inspect', {})
                 report.check(label + ' encrypted headers request a password', status == 422 and locked.get('code') == 'password_required')
                 status, locked = reader.api('POST', f'/archives/{source}/inspect', {'password': 'incorrect-format-test'})

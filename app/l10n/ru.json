@@ -275,7 +275,7 @@
         "The archive contains too many indexed files and directories.": "В архиве слишком много файлов и папок для индексации.",
         "The archive could not be read.": "Не удалось прочитать архив.",
         "The archive directory reports an invalid size.": "Для папки в архиве указан недопустимый размер.",
-        "The archive exceeds the expanded size limit or reports an invalid size.": "Распакованный архив превышает ограничение размера или содержит неверные сведения о размере.",
+        "The archive exceeds the expanded size limit.": "Размер содержимого архива после распаковки превышает допустимый лимит.",
         "The archive exceeds the index filename size limit.": "Суммарный размер имён в архиве превышает ограничение индекса.",
         "The archive is damaged or uses an unsupported compression method.": "Архив повреждён или использует неподдерживаемый метод сжатия.",
         "The archive is not readable.": "Архив недоступен для чтения.",

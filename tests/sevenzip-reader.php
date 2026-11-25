@@ -2,6 +2,9 @@
 declare(strict_types=1);
 
 use OCA\ArchiveTools\Archive\ArchivePasswordRequiredException;
+use OCA\ArchiveTools\Archive\ArchiveReader;
+use OCA\ArchiveTools\Archive\MountArchiveLimits;
+use OCA\ArchiveTools\Archive\MountArchiveMemberTooLargeException;
 use OCA\ArchiveTools\Archive\ProcessStream;
 use OCA\ArchiveTools\Archive\IsolatedArchiveInput;
 use OCA\ArchiveTools\Archive\SevenZipReader;
@@ -87,15 +90,16 @@ function makeArchive(array $files, array $options = [], ?callable $prepare = nul
 }
 
 /** Fault-inject a listing into the real reader/parser through a test-only executable. */
-function listingReader(string $listing): SevenZipReader {
+function listingReader(string $listing, ?SevenZipReader $reader = null): SevenZipReader {
     global $workDirectory, $fixtureCount;
     $file = $workDirectory . '/listing-' . (++$fixtureCount) . '.php';
     $program = '#!' . PHP_BINARY . " -n\n<?php\n"
         . 'if (($argv[1] ?? "") === "i") { echo "   C........  7z  7z\n"; }'
-        . ' else { echo base64_decode(' . var_export(base64_encode($listing), true) . '); }';
+        . ' elseif ($argv[1] === "l") { echo base64_decode(' . var_export(base64_encode($listing), true) . '); }'
+        . ' else { exit(1); }';
     file_put_contents($file, $program);
     chmod($file, 0700);
-    $reader = new SevenZipReader();
+    $reader ??= new SevenZipReader();
     (new ReflectionProperty(SevenZipReader::class, 'binary'))->setValue($reader, $file);
     return $reader;
 }
@@ -217,6 +221,42 @@ try {
         $archive = makeArchive(['a.txt' => '1234', 'b.txt' => '5678']);
         rejects(static fn () => (new SevenZipReader(maxEntries: 1))->inspect($archive), 'Entry-count budget was bypassed.');
         rejects(static fn () => (new SevenZipReader(maxExpandedBytes: 7))->inspect($archive), 'Expanded-byte budget was bypassed.');
+    });
+
+    test('valid large member sizes reach the applicable operation limit', static function () use ($normal): void {
+        $size = 80 * 1024 * 1024 * 1024;
+        $listing = "Path = disk.img\nSize = $size\n\n";
+        $reader = new ArchiveReader(sevenZip: listingReader($listing));
+        $info = $reader->inspectForBrowsing($normal);
+        check($info['entries']['disk.img']['size'] === $size && $info['totalSize'] === $size,
+            'Browsing must return over-limit members and their exact sizes.');
+        $error = rejects(static fn () => listingReader($listing)->inspect($normal), 'The default expanded-size limit was bypassed.');
+        check($error->getMessage() === 'The archive exceeds the expanded size limit.', 'A valid large size was reported as invalid metadata.');
+
+        $limits = new MountArchiveLimits($size);
+        $connectionReader = new SevenZipReader(maxExpandedBytes: $size, mountLimits: $limits);
+        rejects(static fn () => listingReader($listing, $connectionReader)->inspect($normal),
+            'A higher connection total permitted an oversized member.', MountArchiveMemberTooLargeException::class);
+    });
+
+    test('7z browsing retains metadata and integer accumulation limits', static function () use ($normal): void {
+        $overflow = "Path = first.bin\nSize = " . PHP_INT_MAX . "\n\nPath = second.bin\nSize = 1\n\n";
+        rejects(static fn () => listingReader($overflow)->listContents($normal), 'Browse total overflow was accepted.');
+        $twoFiles = "Path = first.bin\nSize = 1\n\nPath = second.bin\nSize = 1\n\n";
+        rejects(static fn () => listingReader($twoFiles, new SevenZipReader(maxEntries: 1))->listContents($normal),
+            'Browsing bypassed the entry-count budget.');
+    });
+
+    test('decimal member sizes are accepted exactly up to the PHP integer boundary', static function () use ($normal): void {
+        $reader = new SevenZipReader(maxExpandedBytes: PHP_INT_MAX);
+        $index = listingReader('Path = exact.img' . "\nSize = " . PHP_INT_MAX . "\n\n", $reader)->inspect($normal);
+        check($index['entries']['exact.img']['size'] === PHP_INT_MAX, 'The maximum representable size was changed or rejected.');
+
+        foreach ([null, '', '-1', '+1', '01', '1e10', '9223372036854775808', '18446744073709551615'] as $invalid) {
+            $listing = "Path = wrong.img\n" . ($invalid === null ? '' : "Size = $invalid\n") . "\n";
+            $error = rejects(static fn () => listingReader($listing, $reader)->inspect($normal), 'Invalid size metadata was accepted.');
+            check($error->getMessage() === 'The archive reports an invalid entry size.', 'Invalid size metadata was classified as an operation limit.');
+        }
     });
 
     test('batch streams preserve selected keys and reject tampered plans before yielding bytes', static function (): void {

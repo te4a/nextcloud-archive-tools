@@ -50,12 +50,11 @@ and review are separate release concerns.
 
 | Integration | Application location | Decision |
 | --- | --- | --- |
-| `OC\Files\Storage\Common` | `ArchiveStorage`, `MetadataOnlyStorage` | Retain the documented storage backend base. The cleanup adapter has no user-file access or writable filesystem operations. |
+| `OC\Files\Storage\Common` | `ArchiveStorage`, `MetadataOnlyStorage`, `ExtractionLockStorage` | Use the documented storage backend base. Native file operations require core's storage type. The extraction adapter forwards operations through the original storage's public interfaces and uses `IMountPoint::wrapStorage()` to reuse the worker's exclusive reservations. |
 | `ICache::searchQuery()`, `ICache::remove()`, `IUserMountCache::removeMount()` | `VirtualStorageCleanup` | Remove the cache data and user mount points recorded in the app's cache registry. New connections use distinct roots in one virtual storage. An upgrade preserves the cache location of each existing connection. |
 | `IFileAccess::getByFileId()` | `MountRepository` | Detect permanent source deletion by file ID. Access checks hide the connection while the source is in the recycle bin. |
 | `IMountPoint`, `IMovableMount`, `IStorageFactory` | `ArchiveMountPoint` | The archive mount implements the public interfaces and asks the core factory to apply its storage wrappers. Archive Tools supplies the lazy storage identity and maps each recipient's share path to the shared archive contents. |
 | `OCP\Files\Cache\ICache` and `OCP\Files\Search` | `AccessCache` | Project the native cache through the public interfaces. Keep the storage and root IDs for mount registration, check access before exposing entries, and constrain searches to the connection's cache path. |
-| `OC\Files\Storage\Wrapper\Wrapper` | `ExtractionLockStorage` | Retain the native storage decorator so writes can use already reserved destination paths while preserving locks against other requests. |
 | `OC\Files\View` | `ExtractionService` | Retain the narrow interrupted-stream unlock compensation pending a verified public equivalent or an upstream fix; removing it can break rollback and leak file/ancestor locks. |
 | `OC_Util::setupFS/tearDownFS` | `ExtractJob` | Replaced with injected public `OCP\Files\ISetupManager`, available and marked consumable since 34.0.0. |
 
@@ -76,6 +75,9 @@ permission. Keep native streamed creation and compensate inside the write's
 exception handler. A size mismatch after the write returns goes directly to
 rollback. `OCP\Files\Lock\ILockManager` addresses collaborative DAV lock
 contexts. The extraction reservation uses transactional file locks.
+If the recipient has no delete permission, rollback resolves the job's still
+reserved output by its file ID under the verified destination in the owner's
+files. It reuses the same locks and deletes only that job's output.
 
 ## Questions for Nextcloud maintainers
 
@@ -142,7 +144,7 @@ decoder concurrency remains governed by the PHP/server infrastructure.
 Release gates must run these checks on both declared major versions and preserve
 native PROPFIND/GET/Range behavior, shared recipient aliases, parent moves,
 immediate access revocation including cached listings, source-version
-preconditions, and lock cleanup after failed or interrupted writes. The
-remaining transactional storage wrapper and interrupted-stream compensation
-depend on internal Nextcloud classes. Any replacement needs to preserve those
-lock and rollback guarantees.
+preconditions, and lock cleanup after failed or interrupted writes. A failed
+write into a create-only share must remove the partial output and allow an
+immediate retry with the same folder name. The interrupted-stream unlock still
+uses the internal `View` API until the core can balance the failed write itself.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0-beta.10
+
+- Browse large 7z archives directly in Nextcloud Files without decoding file contents. Downloading, extraction, and connections still enforce their expanded-size limits.
+- Distinguish a valid 7z or RAR entry above the applicable size limit from malformed size metadata.
+- Roll back an interrupted extraction into a shared folder where the recipient can create files but cannot delete them. Release the reservations so extraction can be retried immediately.
+- Use public storage interfaces and Nextcloud's documented storage base for extraction reservations.
+
 ## 0.5.0-beta.9
 
 - Offer Open for files with a registered Nextcloud Viewer handler and for supported nested archives. Clicking a file without a handler downloads it.

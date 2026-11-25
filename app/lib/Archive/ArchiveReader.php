@@ -29,6 +29,13 @@ final class ArchiveReader {
         return $index;
     }
 
+    public function inspectForBrowsing(string $path, #[SensitiveParameter] ?string $password = null): array {
+        if ($this->detect($path) === '7z') {
+            return $this->sevenZip->listContents($path, $password);
+        }
+        return $this->inspect($path, $password, allowLargeZip: true);
+    }
+
     public function browseZip(string $path, string $directory, #[SensitiveParameter] ?string $password, OperationBudget $budget): ?array {
         if ($this->detect($path) !== 'zip') { return null; }
         return ($this->largeZip ?? $this->zip)->listDirectory($path, $directory, $password, $budget);

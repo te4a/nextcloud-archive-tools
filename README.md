@@ -4,7 +4,7 @@
 
 Archive Tools is a native Nextcloud application for browsing archives inside Files, extracting selected entries through the background queue, and connecting archives as shared read-only folders accessible through WebDAV.
 
-The current prerelease is `0.5.0-beta.9`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
+The current prerelease is `0.5.0-beta.10`. The stable release gates are tracked in [release preparation](docs/RELEASE.md).
 
 ![Archive browsing inside Nextcloud Files](docs/images/native-files.png)
 
@@ -54,7 +54,7 @@ A connection is hidden in Files while its source is in the Nextcloud trash. The 
 
 ## Limits and permissions
 
-The default index accepts at most 10,000 entries, 4 GiB of expanded contents, depth 32, and 8 MiB of entry names. Administrators can enable a larger ZIP index for browsing and selected extraction. Each normalized path component is limited to 250 UTF-8 bytes, matching Nextcloud's filename validation. Paths, links, special files and Unicode collisions are validated before use. [Browsing large ZIP archives](docs/INSTALL.md#browsing-large-zip-archives)
+The default index accepts at most 10,000 entries, 4 GiB of expanded contents, depth 32, and 8 MiB of entry names. Browsing a 7z archive reads its table of contents without decoding member data. The expanded-size limits apply when downloading, extracting, or connecting the archive. Administrators can enable a larger ZIP index for browsing and selected extraction. Each normalized path component is limited to 250 UTF-8 bytes, matching Nextcloud's filename validation. Paths, links, special files and Unicode collisions are validated before use. [Browsing large ZIP archives](docs/INSTALL.md#browsing-large-zip-archives)
 
 Archive connections grant no additional access. Their contents require current read access to the source. Creating a connection requires permission to create content in its parent folder. Archive contents remain read-only.
 

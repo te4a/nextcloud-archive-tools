@@ -96,8 +96,12 @@ final class ArchiveService {
                 return ['unchanged' => true, 'sourceEtag' => $sourceEtag];
             }
             $localPath = $this->localPath($source);
-            $index = $this->reader->inspect($localPath, $password, allowLargeZip: true);
-            if ($password !== null && $password !== '') { $this->probePassword($localPath, $index['entries'], $password); }
+            $index = $this->reader->inspectForBrowsing($localPath, $password);
+            // Listing validates encrypted 7z headers. Passwords for encrypted
+            // file data are validated when a member is actually opened.
+            if ($index['format'] !== '7z' && $password !== null && $password !== '') {
+                $this->probePassword($localPath, $index['entries'], $password);
+            }
             $entries = [];
             foreach ($index['entries'] as $path => $entry) {
                 $entries[] = $this->listedEntry((string)$path, $entry);

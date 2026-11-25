@@ -85,11 +85,15 @@ final class EntryIndexBuilder {
         if (isset($this->entries[$path])) {
             throw new RuntimeException('The archive uses the same path for a file and a directory.');
         }
-        if ($size >= 0) {
-            $this->mountLimits?->checkFileSize($size, $this->totalSize);
+        if ($size < 0) {
+            throw new RuntimeException('The archive reports an invalid entry size.');
         }
-        if ($size < 0 || $size > $this->maxExpandedBytes - $this->totalSize || $compressedSize < 0 || $compressedSize > PHP_INT_MAX - $this->packedSize) {
-            throw new RuntimeException('The archive exceeds the expanded size limit or reports an invalid size.');
+        if ($compressedSize < 0 || $compressedSize > PHP_INT_MAX - $this->packedSize) {
+            throw new RuntimeException('The archive reports an invalid compressed size.');
+        }
+        $this->mountLimits?->checkFileSize($size, $this->totalSize);
+        if ($size > $this->maxExpandedBytes - $this->totalSize) {
+            throw new RuntimeException('The archive exceeds the expanded size limit.');
         }
         $this->totalSize += $size;
         $this->packedSize += $compressedSize;

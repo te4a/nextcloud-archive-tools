@@ -143,13 +143,24 @@ final class SevenZipReader {
     }
 
     public function inspect(string $path, #[\SensitiveParameter] ?string $password = null, ?OperationBudget $budget = null): array {
+        return $this->readIndex($path, $password, $budget);
+    }
+
+    /** List 7z headers only. Operations that read member data use inspect(). */
+    public function listContents(string $path, #[\SensitiveParameter] ?string $password = null): array {
+        return $this->readIndex($path, $password, new OperationBudget(15), listingOnly: true);
+    }
+
+    private function readIndex(string $path, #[\SensitiveParameter] ?string $password, ?OperationBudget $budget, bool $listingOnly = false): array {
         $budget?->check();
         $type = $this->format($path);
+        if ($listingOnly && $type !== '7z') { throw new \RuntimeException('The file is not a supported archive.'); }
         $format = $type === 'rar5' ? 'rar' : $type;
         if (!$this->supports($format, $budget)) { throw new \RuntimeException('This archive format requires system 7-Zip, util-linux and PHP proc_open.'); }
         $input = new IsolatedArchiveInput($path);
         $text = ProcessStream::capture($this->command('l', $input->path(), $type), $password, input: $input, budget: $budget);
-        $builder = new EntryIndexBuilder($this->maxEntries, $this->maxExpandedBytes, $this->maxDepth, $this->maxIndexNameBytes, $this->mountLimits);
+        $builder = new EntryIndexBuilder($this->maxEntries, $listingOnly ? PHP_INT_MAX : $this->maxExpandedBytes,
+            $this->maxDepth, $this->maxIndexNameBytes, $listingOnly ? null : $this->mountLimits);
         foreach ($this->metadata($text) as $values) {
             $budget?->check();
             $attributes = $values['Attributes'] ?? '';
@@ -167,7 +178,7 @@ final class SevenZipReader {
             if (preg_match('/ ([^ ]{10})$/D', $attributes, $mode) && !in_array($mode[1][0], ['-', 'd', '0'], true)) {
                 throw new \RuntimeException('Symbolic links and special files are not supported in archives.');
             }
-            $size = (int)$values['Size'];
+            $size = $values['Size'];
             $mtime = isset($values['Modified']) ? (strtotime($values['Modified'] . ' UTC') ?: 0) : 0;
             $crc = $values['CRC'] ?? '';
             if ($crc !== '' && !preg_match('/^[0-9A-Fa-f]{8}$/D', $crc)) { throw new \RuntimeException('The archive contains ambiguous or unsupported entry metadata.'); }
@@ -213,9 +224,15 @@ final class SevenZipReader {
 
     private function metadataRecord(array $values, int &$records): array {
         if (++$records > $this->maxEntries) { throw new \RuntimeException('The archive contains too many entries.'); }
-        if (!isset($values['Path'], $values['Size']) || !preg_match('/^(0|[1-9][0-9]*)$/D', $values['Size']) || strlen($values['Size']) > 10) {
+        $size = $values['Size'] ?? '';
+        if (!isset($values['Path']) || !preg_match('/^(0|[1-9][0-9]*)$/D', $size)) {
             throw new \RuntimeException('The archive reports an invalid entry size.');
         }
+        $parsedSize = filter_var($size, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+        if ($parsedSize === false) {
+            throw new \RuntimeException('The archive reports an invalid entry size.');
+        }
+        $values['Size'] = $parsedSize;
         if (preg_match('/[\x00-\x1f\x7f]/', $values['Path']) || preg_match('//u', $values['Path']) !== 1) {
             throw new \RuntimeException('The archive contains ambiguous or unsupported entry metadata.');
         }
