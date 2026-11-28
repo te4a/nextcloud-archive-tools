@@ -8,6 +8,14 @@ ROOT = Path(__file__).resolve().parents[1]
 L10N = ROOT / 'app' / 'l10n'
 RU_PLURAL = 'nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || n%10>=5 || (n%100>=11 && n%100<=14) ? 2 : 3);'
 PAIRS = '''The archive changed. Open it again before continuing. => Архив изменился. Откройте его заново перед продолжением.
+ZIP connection mode => Режим подключения ZIP
+Full indexing => Полная индексация
+Load folders on demand => Загрузка папок по запросу
+This setting applies to new ZIP connections. => Настройка применяется к новым подключениям ZIP.
+Invalid ZIP connection mode. => Недопустимый режим подключения ZIP.
+Loading folders on demand requires ZIP and PHP zlib. => Для загрузки папок по запросу нужен ZIP-архив и расширение PHP zlib.
+This alternative applies only to this connection. => Выбор применяется только к этому подключению.
+Connect with folders loaded on demand => Подключить с загрузкой папок по запросу
 The owner folder does not match the reserved output. => Папка владельца не совпадает с папкой, зарезервированной для распаковки.
 The partial output has no eligible share owner. => Не удалось определить владельца общей папки для отката распаковки.
 The partial output still exists after deletion. => Папка незавершённой распаковки сохранилась после попытки удаления.

@@ -44,6 +44,13 @@ final class MountRepository {
         return $row === false ? null : $row;
     }
 
+    private function exists(int $id): bool {
+        $qb = $this->db->getQueryBuilder();
+        return $qb->select('id')->from('archive_tools_mounts')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
+            ->executeQuery()->fetchOne() !== false;
+    }
+
     public function findPreview(string $owner, int $sourceId, string $name): ?int {
         $qb = $this->db->getQueryBuilder();
         $qb->select('id')->from('archive_tools_mounts')
@@ -173,7 +180,7 @@ final class MountRepository {
     public function withShared(int $id, callable $operation): mixed {
         $this->locks->acquireLock($this->lockKey($id), ILockingProvider::LOCK_SHARED);
         try {
-            if ($this->find($id) === null) {
+            if (!$this->exists($id)) {
                 throw new \RuntimeException('The archive connection is no longer available.');
             }
             return $operation();
@@ -186,7 +193,7 @@ final class MountRepository {
     public function beginReadLease(int $id, bool $activity = true): array {
         $this->locks->acquireLock($this->lockKey($id), ILockingProvider::LOCK_SHARED);
         try {
-            if ($this->find($id) === null) {
+            if (!$this->exists($id)) {
                 throw new \RuntimeException('The archive connection is no longer available.');
             }
             $token = bin2hex(random_bytes(24));

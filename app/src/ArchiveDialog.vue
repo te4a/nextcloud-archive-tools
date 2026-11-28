@@ -4,7 +4,7 @@ import { FilePickerClosed, getFilePickerBuilder } from '@nextcloud/dialogs'
 import { Permission } from '@nextcloud/files'
 import { loadState } from '@nextcloud/initial-state'
 import { t } from '@nextcloud/l10n'
-import { api, errorMessage, isAborted } from './api.ts'
+import { api, ApiError, errorMessage, isAborted } from './api.ts'
 import { compactSelection } from './selection.ts'
 import { archiveBaseName } from './archive-formats.ts'
 import type { ArchiveDialogOptions, ArchiveDialogResult } from './archive-dialogs.ts'
@@ -19,6 +19,7 @@ const passwordInput = ref<HTMLInputElement | null>(null)
 const cancelButton = ref<HTMLButtonElement | null>(null)
 const password = ref(props.options.password ?? '')
 const error = ref(props.options.error ?? '')
+const retryEtag = ref<string>()
 const busy = ref(false)
 const choosingDestination = ref(false)
 const destination = ref<{ id: string; name: string } | null>(null)
@@ -72,6 +73,8 @@ async function submit(): Promise<void> {
     return
   }
   const expectedEtag = props.options.info?.sourceEtag ?? directConnect?.expectedEtag
+  const fallback = retryEtag.value
+  retryEtag.value = undefined
   busy.value = true
   error.value = ''
   try {
@@ -91,12 +94,18 @@ async function submit(): Promise<void> {
       const mount = await api<Mount>('/mounts', {
         method: 'POST', signal: request.signal,
         body: JSON.stringify({ sourceId: props.options.sourceId, name: folderName.value,
-          password: password.value || null, pinned: pinned.value, expectedEtag }),
+          password: password.value || null, pinned: pinned.value, expectedEtag: fallback ?? expectedEtag,
+          mode: fallback ? 'on_demand' : 'default' }),
       })
       if (!disposed) emit('complete', { kind: 'connect', mount })
     }
   } catch (caught) {
-    if (!disposed && !isAborted(caught)) error.value = errorMessage(caught)
+    if (!disposed && !isAborted(caught)) {
+      error.value = errorMessage(caught)
+      if (!fallback && caught instanceof ApiError && caught.code === 'mount_retry_on_demand') {
+        retryEtag.value = caught.sourceEtag
+      }
+    }
   } finally { busy.value = false }
 }
 
@@ -142,10 +151,11 @@ onBeforeUnmount(() => {
         </template>
       </template>
       <p v-if="error" class="at-files-error" role="alert">{{ error }}</p>
+      <p v-if="retryEtag" class="at-files-hint">{{ tr('This alternative applies only to this connection.') }}</p>
       <div class="at-files-dialog-actions">
         <button ref="cancelButton" type="button" :disabled="busy || choosingDestination" @click="cancel">{{ tr('Cancel') }}</button>
         <button type="submit" class="primary" :disabled="busy || choosingDestination">
-          {{ options.kind === 'password' ? tr('Unlock archive') : options.kind === 'connect' ? (busy ? tr('Connecting…') : tr('Connect archive')) : (busy ? tr('Scheduling…') : tr('Start extraction')) }}
+          {{ options.kind === 'password' ? tr('Unlock archive') : options.kind === 'connect' ? (busy ? tr('Connecting…') : retryEtag ? tr('Connect with folders loaded on demand') : tr('Connect archive')) : (busy ? tr('Scheduling…') : tr('Start extraction')) }}
         </button>
       </div>
     </form>

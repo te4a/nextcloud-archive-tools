@@ -67,11 +67,16 @@ In Files, ZIP browsing allows up to 120,000 central directory records, 16 GiB of
 
 Opening a ZIP in Files shows the current folder's files and subfolders. Each folder request scans the ZIP central directory and returns only that folder's direct children. Test representative archives against your deployment's memory and request limits before enabling the option, especially if a single folder contains many files. Downloads and extraction still validate a full ZIP index. A selected member can be downloaded as a stream with a 4 GiB limit, without writing an extracted copy to disk. An extraction selection still has to fit within 10,000 indexed entries, 4 GiB of uncompressed contents, 8 MiB of names, and the task's metadata allowance. For a larger ZIP, select a subset that fits those limits.
 
-## Maximum archive size for connections
+## Archive connection settings
 
-Under **Administration settings → Additional settings → Archive Tools**, set the maximum total uncompressed size for a new archive connection. The default is 4096 MiB (4 GiB). Enter a positive whole number in MiB. Its equivalent in bytes must fit in a PHP integer. Individual files in a connected archive are limited to 4 GiB. The standard index limits for entry counts, path depth, and name bytes apply.
+Under **Administration settings → Additional settings → Archive Tools**, set the maximum total uncompressed size for a new archive connection. The default is 4096 MiB (4 GiB). Enter a positive whole number in MiB. Its equivalent in bytes must fit in a PHP integer. Individual files in a connected archive are limited to 4 GiB.
 
-Changing the setting applies to new connections. Existing connections remain readable with their indexed size. Use **Connect archive** in the Files context menu when the archive exceeds the separate browsing limits.
+The **ZIP connection mode** setting applies to new ZIP connections, including when they are accessed through WebDAV.
+
+- **Full indexing** is the default. It indexes up to 10,000 entries, including implied directories, in Nextcloud's file cache when connecting the archive.
+- **Load folders on demand** checks the ZIP directory once at connection time and adds entries to Nextcloud's file cache as users access them. It supports up to 120,000 entries in total, 10,000 direct children per folder, and 32 MiB of cumulative raw and normalized name bytes. PHP zlib is required.
+
+If a ZIP exceeds the entry or filename metadata limits of full indexing, Files can offer a one-time connection with folders loaded on demand. The configured size limit still applies. Existing connections keep their mode when the setting changes. Nextcloud's file search only sees entries that have been added to its cache.
 
 ## Resource limits and task history
 

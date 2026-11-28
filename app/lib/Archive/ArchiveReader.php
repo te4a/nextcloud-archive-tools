@@ -41,11 +41,21 @@ final class ArchiveReader {
         return ($this->largeZip ?? $this->zip)->listDirectory($path, $directory, $password, $budget);
     }
 
-    public function inspectForMount(string $path, #[SensitiveParameter] ?string $password, int $maxExpandedBytes): array {
+    public function inspectForMount(string $path, #[SensitiveParameter] ?string $password, int $maxExpandedBytes, bool $onDemand = false, ?OperationBudget $budget = null): array {
         if ($maxExpandedBytes < MountArchiveLimits::MIN_EXPANDED_BYTES) {
             throw new \InvalidArgumentException('Invalid archive connection size limit.');
         }
-        return $this->mountReader($this->detect($path), new MountArchiveLimits($maxExpandedBytes))->inspect($path, $password);
+        $limits = new MountArchiveLimits($maxExpandedBytes);
+        $format = $this->detect($path);
+        if (!$onDemand) {
+            return $this->mountReader($format, $limits)->inspect($path, $password, $budget);
+        }
+        if ($format !== 'zip' || !function_exists('gzdeflate')) {
+            throw new RuntimeException('Loading folders on demand requires ZIP and PHP zlib.');
+        }
+        return (new ZipReader(maxEntries: ZipFolderIndex::MAX_ENTRIES, maxExpandedBytes: $limits->expandedBytes,
+            maxIndexNameBytes: ZipFolderIndex::MAX_NAME_BYTES, maxMemberBytes: MountArchiveLimits::MAX_MEMBER_BYTES,
+            mountLimits: $limits))->inspect($path, $password, $budget);
     }
 
     /** @return resource */

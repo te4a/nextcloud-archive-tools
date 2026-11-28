@@ -16,6 +16,7 @@
         const timeout = document.getElementById('archive-tools-idle-timeout');
         const allowPin = document.getElementById('archive-tools-allow-pin');
         const mountSize = document.getElementById('archive-tools-mount-size');
+        const zipMountMode = document.getElementById('archive-tools-zip-mount-mode');
         const retention = document.getElementById('archive-tools-jobs-retention');
 
         function showStatus(message, failed = false) {
@@ -31,6 +32,7 @@
                 mountSize.value = String(settings.maxMountArchiveSizeMiB);
             }
             retention.value = String(settings.jobsRetentionDays ?? 30);
+            zipMountMode.value = settings.zipMountMode === 'on_demand' ? 'on_demand' : 'full';
         }
 
         try {
@@ -68,6 +70,7 @@
                         idleTimeoutMinutes: Number(timeout.value),
                         allowPin: allowPin.checked,
                         maxMountArchiveSizeMiB,
+                        zipMountMode: zipMountMode.value,
                         jobsRetentionDays: Number(retention.value),
                     }),
                 });

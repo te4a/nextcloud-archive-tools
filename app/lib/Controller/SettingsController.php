@@ -27,9 +27,9 @@ class SettingsController extends Controller {
         return new DataResponse($this->settings->getSettings());
     }
 
-    public function update(mixed $openByClick, mixed $idleTimeoutMinutes, mixed $allowPin, mixed $jobsRetentionDays = null, mixed $maxMountArchiveSizeMiB = null): DataResponse {
+    public function update(mixed $openByClick, mixed $idleTimeoutMinutes, mixed $allowPin, mixed $jobsRetentionDays = null, mixed $maxMountArchiveSizeMiB = null, mixed $zipMountMode = null): DataResponse {
         try {
-            return new DataResponse($this->settings->update($openByClick, $idleTimeoutMinutes, $allowPin, $jobsRetentionDays, $maxMountArchiveSizeMiB));
+            return new DataResponse($this->settings->update($openByClick, $idleTimeoutMinutes, $allowPin, $jobsRetentionDays, $maxMountArchiveSizeMiB, $zipMountMode));
         } catch (InvalidArgumentException $exception) {
             return new DataResponse([
                 'message' => $this->l10n->t($exception->getMessage()),

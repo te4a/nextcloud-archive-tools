@@ -47,6 +47,7 @@ const dialog = ref<HTMLDialogElement | null>(null)
 const destination = ref<{ id: string; name: string } | null>(null)
 const folderName = ref('')
 const connectionName = ref('')
+const mountRetryEtag = ref<string>()
 const pinned = ref(false)
 const pendingAction = ref<string | null>(initialAction)
 const retryPlan = ref<JobDetails | null>(null)
@@ -204,6 +205,7 @@ async function openDialog(mode: 'password' | 'extract' | 'connect' | 'disconnect
 function closeDialog(): void {
   dialog.value?.close()
   dialogMode.value = null
+  mountRetryEtag.value = undefined
   passwordDraft.value = ''
   pendingDisconnect.value = null
 }
@@ -280,17 +282,26 @@ async function extract(): Promise<void> {
 
 async function connect(): Promise<void> {
   if (!sourceId.value || actionBusy.value) return
+  const fallback = mountRetryEtag.value
+  mountRetryEtag.value = undefined
   actionBusy.value = true
   error.value = ''
   try {
     await api<Mount>('/mounts', {
-      method: 'POST', body: JSON.stringify({ sourceId: sourceId.value, name: connectionName.value, password: password.value || null, pinned: pinned.value, expectedEtag: info.value?.sourceEtag }),
+      method: 'POST', body: JSON.stringify({ sourceId: sourceId.value, name: connectionName.value,
+        password: password.value || null, pinned: pinned.value, expectedEtag: fallback ?? info.value?.sourceEtag,
+        mode: fallback ? 'on_demand' : 'default' }),
     })
     closeDialog()
     notice.value = tr('Archive connected. Participants who can read this folder and archive can access its contents.')
     tab.value = 'connections'
     await refreshCollections()
-  } catch (caught) { error.value = errorMessage(caught) }
+  } catch (caught) {
+    error.value = errorMessage(caught)
+    if (!fallback && caught instanceof ApiError && caught.code === 'mount_retry_on_demand') {
+      mountRetryEtag.value = caught.sourceEtag
+    }
+  }
   finally { actionBusy.value = false }
 }
 
@@ -560,7 +571,8 @@ onBeforeUnmount(() => {
           <label v-if="settings.allowPin" class="at-checkbox-label"><input v-model="pinned" type="checkbox">{{ tr('Keep connected until manually disconnected') }}</label>
           <p v-if="info?.encrypted" class="at-hint">{{ tr('Connecting this protected archive unlocks its contents for eligible folder participants. The password itself is not shared.') }}</p>
           <p v-if="error" class="at-dialog-error" role="alert">{{ error }}</p>
-          <div class="at-dialog-actions"><button type="button" :disabled="actionBusy" @click="closeDialog">{{ tr('Cancel') }}</button><button type="submit" class="primary" :disabled="actionBusy">{{ actionBusy ? tr('Connecting…') : tr('Connect archive') }}</button></div>
+          <p v-if="mountRetryEtag" class="at-hint">{{ tr('This alternative applies only to this connection.') }}</p>
+          <div class="at-dialog-actions"><button type="button" :disabled="actionBusy" @click="closeDialog">{{ tr('Cancel') }}</button><button type="submit" class="primary" :disabled="actionBusy">{{ actionBusy ? tr('Connecting…') : mountRetryEtag ? tr('Connect with folders loaded on demand') : tr('Connect archive') }}</button></div>
         </form>
         <form v-else @submit.prevent="confirmDisconnect" :aria-busy="actionBusy">
           <h2 id="at-dialog-title">{{ tr('Disconnect for everyone') }}</h2>

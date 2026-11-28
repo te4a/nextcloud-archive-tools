@@ -21,6 +21,14 @@ use OCA\ArchiveTools\Service\SettingsService;
             <label for="archive-tools-allow-pin"><?php p($l->t('Allow archives to be pinned against automatic disconnection')); ?></label>
         </div>
         <div class="archive-tools-setting">
+            <label for="archive-tools-zip-mount-mode"><?php p($l->t('ZIP connection mode')); ?></label>
+            <select id="archive-tools-zip-mount-mode" name="zipMountMode">
+                <option value="full"><?php p($l->t('Full indexing')); ?></option>
+                <option value="on_demand"><?php p($l->t('Load folders on demand')); ?></option>
+            </select>
+            <p class="settings-hint"><?php p($l->t('This setting applies to new ZIP connections.')); ?></p>
+        </div>
+        <div class="archive-tools-setting">
             <label for="archive-tools-mount-size"><?php p($l->t('Maximum expanded size of connected archives (MiB)')); ?></label>
             <input type="number" id="archive-tools-mount-size" name="maxMountArchiveSizeMiB" min="1" value="<?php p(SettingsService::DEFAULT_MOUNT_ARCHIVE_SIZE_MIB); ?>" step="1" required aria-describedby="archive-tools-mount-size-help">
             <p class="settings-hint" id="archive-tools-mount-size-help"><?php p($l->t('This limit applies to the total uncompressed size when connecting a new archive.')); ?></p>

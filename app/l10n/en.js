@@ -370,5 +370,13 @@ OC.L10N.register("archive_tools", {
     "The partial output has no eligible share owner.": "The partial output has no eligible share owner.",
     "The partial output still exists after deletion.": "The partial output still exists after deletion.",
     "The shared destination could not be identified for its owner.": "The shared destination could not be identified for its owner.",
-    "The archive exceeds the expanded size limit or reports an invalid size.": "The archive exceeds the expanded size limit or reports an invalid size."
+    "The archive exceeds the expanded size limit or reports an invalid size.": "The archive exceeds the expanded size limit or reports an invalid size.",
+    "ZIP connection mode": "ZIP connection mode",
+    "Full indexing": "Full indexing",
+    "Load folders on demand": "Load folders on demand",
+    "This setting applies to new ZIP connections.": "This setting applies to new ZIP connections.",
+    "Invalid ZIP connection mode.": "Invalid ZIP connection mode.",
+    "Loading folders on demand requires ZIP and PHP zlib.": "Loading folders on demand requires ZIP and PHP zlib.",
+    "This alternative applies only to this connection.": "This alternative applies only to this connection.",
+    "Connect with folders loaded on demand": "Connect with folders loaded on demand"
 }, "nplurals=2; plural=(n != 1);");

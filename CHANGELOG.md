@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-beta.12
+
+- Choose full ZIP indexing or load folders on demand for new connections.
+- Offer a one-time on-demand connection when a ZIP exceeds the full index limits.
+- Read ZIP members through Files and WebDAV as they are accessed. Revoking a folder share keeps album cleanup limited to entries already in the file cache.
+
 ## 0.5.0-beta.11
 
 - Browse large 7z archives directly in Nextcloud Files without decoding file contents. Downloading, extraction, and connections still enforce their expanded-size limits.

@@ -59,7 +59,10 @@ final class ZipReader {
 		$zip = $this->open($localPath, $password);
 		try {
 			if ($zip->numFiles > $this->maxEntries) {
-				throw new RuntimeException('The ZIP archive contains too many entries.');
+				throw new ZipIndexLimitException(
+					'The ZIP archive contains too many entries.',
+					canRetryOnDemand: $zip->numFiles <= ZipFolderIndex::MAX_ENTRIES,
+				);
 			}
 			$entries = [];
 			$rawPaths = [];
@@ -422,14 +425,14 @@ final class ZipReader {
 
 	private function checkIndexSize(array $entries): void {
 		if (count($entries) > $this->maxEntries) {
-			throw new RuntimeException('The ZIP archive contains too many indexed files and directories.');
+			throw new ZipIndexLimitException('The ZIP archive contains too many indexed files and directories.');
 		}
 	}
 
 	/** Count each normalized index key and each original member name once. */
 	private function consumeNameBytes(int $bytes, int &$total): void {
 		if ($bytes > $this->maxIndexNameBytes - $total) {
-			throw new RuntimeException('The ZIP archive exceeds the index filename size limit.');
+			throw new ZipIndexLimitException('The ZIP archive exceeds the index filename size limit.');
 		}
 		$total += $bytes;
 	}

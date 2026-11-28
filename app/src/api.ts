@@ -3,7 +3,7 @@ import { generateUrl } from '@nextcloud/router'
 import { t } from '@nextcloud/l10n'
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status: number, public readonly code?: string) { super(message) }
+  constructor(message: string, public readonly status: number, public readonly code?: string, public readonly sourceEtag?: string) { super(message) }
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -26,7 +26,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const result = await response.json().catch(() => ({}))
   if (!response.ok) {
     throw new ApiError(result.message || t('archive_tools', 'The operation failed. Try again.'), response.status,
-      typeof result.code === 'string' ? result.code : undefined)
+      typeof result.code === 'string' ? result.code : undefined,
+      typeof result.sourceEtag === 'string' ? result.sourceEtag : undefined)
   }
   return result as T
 }

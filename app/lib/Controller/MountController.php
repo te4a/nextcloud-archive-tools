@@ -6,6 +6,9 @@ namespace OCA\ArchiveTools\Controller;
 use OCA\ArchiveTools\Archive\ArchiveReader;
 use OCA\ArchiveTools\Archive\MountArchiveMemberTooLargeException;
 use OCA\ArchiveTools\Archive\MountArchiveSizeExceededException;
+use OCA\ArchiveTools\Archive\OperationBudget;
+use OCA\ArchiveTools\Archive\ZipFolderIndex;
+use OCA\ArchiveTools\Archive\ZipIndexLimitException;
 use OCA\ArchiveTools\Service\ArchiveChangedException;
 use OCA\ArchiveTools\Service\ArchiveService;
 use OCA\ArchiveTools\Service\MountRepository;
@@ -148,11 +151,14 @@ final class MountController extends Controller {
     }
 
     #[NoAdminRequired]
-    public function create(int $sourceId, string $name = '', #[\SensitiveParameter] ?string $password = null, bool $pinned = false, ?string $expectedEtag = null): JSONResponse {
+    public function create(int $sourceId, string $name = '', #[\SensitiveParameter] ?string $password = null, bool $pinned = false, ?string $expectedEtag = null, string $mode = 'default'): JSONResponse {
         $lockedSource = null;
         $activity = null;
         try {
             AdmissionService::validatePassword($password);
+            if (!in_array($mode, ['default', 'on_demand'], true)) {
+                throw new \InvalidArgumentException('Invalid ZIP connection mode.');
+            }
             $activity = $this->lifecycle->enter();
             $source = $this->nodeById($sourceId);
             if (!$source instanceof File) {
@@ -191,10 +197,17 @@ final class MountController extends Controller {
                 throw new \RuntimeException('Unable to read the archive.');
             }
             $sizeLimitMiB = $this->settings->maxMountArchiveSizeMiB();
+            $onDemand = $mode === 'on_demand'
+                || ($this->settings->zipMountMode() === 'on_demand' && $this->reader->detect($localPath) === 'zip');
+            $budget = $onDemand ? new OperationBudget(25) : null;
             try {
-                $index = $this->reader->inspectForMount($localPath, $password, $sizeLimitMiB * SettingsService::BYTES_PER_MIB);
+                $index = $this->reader->inspectForMount($localPath, $password, $sizeLimitMiB * SettingsService::BYTES_PER_MIB, $onDemand, $budget);
             } catch (MountArchiveSizeExceededException) {
                 return $this->sizeLimitResponse($sizeLimitMiB);
+            } catch (ZipIndexLimitException $error) {
+                if ($onDemand || !$error->canRetryOnDemand || !function_exists('gzdeflate')) { throw $error; }
+                return new JSONResponse(['message' => $this->l->t($error->getMessage()),
+                    'code' => 'mount_retry_on_demand', 'sourceEtag' => $sourceEtag], 422);
             }
             if ($index['encrypted'] && ($password === null || $password === '')) {
                 return new JSONResponse(['message' => $this->l->t('This archive requires a password.')], 422);
@@ -210,9 +223,16 @@ final class MountController extends Controller {
                     }
                 }
             }
+            $longestPath = 0;
+            foreach ($index['entries'] as $member => $_entry) {
+                $longestPath = max($longestPath, mb_strlen((string)$member, 'UTF-8'));
+            }
+            if ($onDemand) {
+                ZipFolderIndex::pack($index, $budget);
+            }
             $indexJson = json_encode($index, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
             $encryptedPassword = $password === null ? null : $this->crypto->encrypt($password);
-            return $this->lifecycle->write(function () use ($source, $parent, $owner, $name, $pinned, $sourceEtag, $index, $indexJson, $encryptedPassword): JSONResponse {
+            return $this->lifecycle->write(function () use ($source, $parent, $owner, $name, $pinned, $sourceEtag, $onDemand, $longestPath, $indexJson, $encryptedPassword): JSONResponse {
             $this->admission->assertConnection($owner, $indexJson, $encryptedPassword);
             $id = $this->mounts->create([
                 'source_id' => $source->getId(), 'parent_id' => $parent->getId(),
@@ -223,15 +243,13 @@ final class MountController extends Controller {
                 'password' => $encryptedPassword,
             ]);
             $branch = ArchiveStorage::branch($id);
-            foreach ($index['entries'] as $member => $_entry) {
-                if (!ArchiveStorage::fitsCachePath($branch, (string)$member)) {
-                    throw new \InvalidArgumentException('An archive member path is too long to connect this archive. Open the archive to browse its contents.');
-                }
+            if (!ArchiveStorage::fitsCachePath($branch, str_repeat('a', $longestPath))) {
+                throw new \InvalidArgumentException('An archive member path is too long to connect this archive. Open the archive to browse its contents.');
             }
             try {
                 $initializationLease = $this->mounts->beginReadLease($id);
                 try {
-                    $this->initializer->initialize($id, $this->userSession->getUser());
+                    $this->initializer->initialize($id, $this->userSession->getUser(), onDemand: $onDemand);
                 } finally {
                     $this->mounts->endReadLease($initializationLease);
                 }

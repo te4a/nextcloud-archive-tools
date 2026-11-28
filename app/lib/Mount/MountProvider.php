@@ -7,6 +7,7 @@ namespace OCA\ArchiveTools\Mount;
 use OCA\ArchiveTools\Archive\ArchiveReader;
 use OCA\ArchiveTools\Service\MountRepository;
 use OCA\ArchiveTools\Service\LifecycleService;
+use OCA\ArchiveTools\Service\ShareDeletionScope;
 use OCP\Files\Config\IMountProvider;
 use OCP\Files\Config\IUserMountCache;
 use OCP\Files\IMimeTypeDetector;
@@ -27,6 +28,7 @@ final class MountProvider implements IMountProvider {
         private IMimeTypeDetector $mimeTypes,
         private LoggerInterface $logger,
         private LifecycleService $lifecycle,
+        private ShareDeletionScope $shareDeletion,
     ) {}
 
     public function getMountsForUser(IUser $user, IStorageFactory $loader): array {
@@ -92,6 +94,7 @@ final class MountProvider implements IMountProvider {
                             'reader' => $this->reader,
                             'crypto' => $this->crypto,
                             'mimeTypes' => $this->mimeTypes,
+                            'shareDeletion' => $this->shareDeletion,
                         ],
                         factory: $loader,
                         logger: $this->logger,

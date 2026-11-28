@@ -7,10 +7,12 @@ namespace OCA\ArchiveTools\Storage;
 use Icewind\Streams\IteratorDirectory;
 use OC\Files\Storage\Common;
 use OCA\ArchiveTools\Archive\ArchiveReader;
+use OCA\ArchiveTools\Archive\ZipFolderIndex;
 use OCA\ArchiveTools\Service\MountRepository;
 use OCA\ArchiveTools\Service\LifecycleService;
 use OCA\ArchiveTools\Service\LifecycleLease;
 use OCA\ArchiveTools\Service\MetadataOnlyStorage;
+use OCA\ArchiveTools\Service\ShareDeletionScope;
 use OCP\Constants;
 use OCP\Files\Cache\ICache;
 use OCP\Files\File;
@@ -38,8 +40,10 @@ final class ArchiveStorage extends Common {
     private ArchiveReader $reader;
     private ICrypto $crypto;
     private IMimeTypeDetector $mimeTypes;
+    private readonly ShareDeletionScope $shareDeletion;
     private ?File $source = null;
     private ?array $entries = null;
+    private ?ZipFolderIndex $folderIndex = null;
     private ?string $password = null;
     private int $expandedBytes = 1;
     private bool $accessResolved = false;
@@ -70,6 +74,7 @@ final class ArchiveStorage extends Common {
         $this->reader = $parameters['reader'];
         $this->crypto = $parameters['crypto'];
         $this->mimeTypes = $parameters['mimeTypes'];
+        $this->shareDeletion = $parameters['shareDeletion'];
         if (isset($parameters['onConstructed'])) {
             $parameters['onConstructed']($this);
         }
@@ -122,7 +127,78 @@ final class ArchiveStorage extends Common {
                 });
             },
             $this->seedCacheRoot(...),
+            $this->hydrateCache(...),
         );
+    }
+
+    /** Supply exact path lookups and complete immediate listings on demand. */
+    private function hydrateCache(ICache $cache, string $path, bool $listChildren): void {
+        // Album cleanup walks the shared tree to find existing file IDs. A ZIP
+        // member that has never been indexed cannot belong to a Nextcloud album.
+        if ($this->folderIndex === null || $this->shareDeletion->isActive() || self::normalizePath($path) !== $path) {
+            return;
+        }
+        $nativePath = $path === '' ? $this->branch : $this->branch . '/' . $path;
+        $cached = $cache->get($nativePath);
+        if (!$listChildren && $cached && ($path !== '' || $cached->getSize() >= 0)) {
+            return;
+        }
+        $entry = $this->entry($path);
+        if ($entry === null) {
+            return;
+        }
+        $children = $listChildren && $entry['type'] === 'dir' ? $this->folderIndex->children($path) : [];
+        if ($listChildren && $cached && count($children) === count($cache->getFolderContentsById($cached->getId()))) {
+            if ($path !== '' || $cached->getSize() >= 0) {
+                return;
+            }
+        }
+
+        $id = (int)$this->mount['id'];
+        $this->repository->withShared($id, function () use ($cache, $path, $nativePath, $children): void {
+            $this->seedCacheRoot($cache);
+            $locks = Server::get(ILockingProvider::class);
+            $key = 'archive-tools/project/' . $this->branch;
+            $locks->acquireLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+            try {
+                $parts = $path === '' ? [] : explode('/', $path);
+                $prefix = '';
+                foreach ($parts as $part) {
+                    $prefix = $prefix === '' ? $part : $prefix . '/' . $part;
+                    $this->cacheIndexedEntry($cache, $prefix, $this->entry($prefix));
+                }
+                $root = $cache->get($this->branch);
+                if ($root && $root->getSize() < 0) {
+                    $cache->update($root->getId(), ['size' => $this->entries['']['size']]);
+                }
+                if ($children !== []) {
+                    $present = [];
+                    foreach ($cache->getFolderContents($nativePath) as $child) {
+                        $present[$child->getName()] = true;
+                    }
+                    foreach ($children as $name => $entry) {
+                        if (!isset($present[$name])) {
+                            $childPath = $path === '' ? (string)$name : $path . '/' . $name;
+                            $this->cacheIndexedEntry($cache, $childPath, $entry, checkExisting: false);
+                        }
+                    }
+                }
+            } finally {
+                $locks->releaseLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+            }
+        });
+    }
+
+    private function cacheIndexedEntry(ICache $cache, string $path, ?array $entry, bool $checkExisting = true): void {
+        $nativePath = $this->branch . '/' . $path;
+        if ($entry === null || ($checkExisting && $cache->getId($nativePath) > 0)) {
+            return;
+        }
+        $cache->insert($nativePath, [
+            'mimetype' => $entry['type'] === 'dir' ? 'httpd/unix-directory' : $this->mimeTypes->detectPath($path),
+            'size' => $entry['size'], 'mtime' => $entry['mtime'], 'storage_mtime' => $entry['mtime'],
+            'permissions' => Constants::PERMISSION_READ, 'etag' => $this->entryEtag($path, $entry),
+        ]);
     }
 
     private function seedCacheRoot(ICache $cache): int {
@@ -285,6 +361,10 @@ final class ArchiveStorage extends Common {
         if ($entry === null || $normalized === null) {
             return false;
         }
+        return $this->entryEtag($normalized, $entry);
+    }
+
+    private function entryEtag(string $normalized, array $entry): string {
         // Core filecache.etag is varchar(40). PostgreSQL enforces this bound;
         // SQLite accepts longer values and would hide an incompatible index.
         $identity = $this->branch === '' ? $this->cacheIdentity : self::previousBranch((int)$this->mount['id'], (string)$this->mount['source_etag']);
@@ -309,18 +389,22 @@ final class ArchiveStorage extends Common {
         if ($normalized === null || !$this->is_dir($path)) {
             return false;
         }
-        $prefix = $normalized === '' ? '' : $normalized . '/';
-        $names = [];
-        foreach ($this->entries as $entryPath => $_entry) {
-            // PHP converts numeric-string array keys (e.g. ZIP entry "2026")
-            // to integers; filesystem path functions require strings here.
-            $entryPath = (string)$entryPath;
-            if ($entryPath === $normalized || !str_starts_with($entryPath, $prefix)) {
-                continue;
-            }
-            $remaining = substr($entryPath, strlen($prefix));
-            if ($remaining !== '' && !str_contains($remaining, '/')) {
-                $names[] = $remaining;
+        if ($this->folderIndex !== null) {
+            $names = array_map('strval', array_keys($this->folderIndex->children($normalized)));
+        } else {
+            $prefix = $normalized === '' ? '' : $normalized . '/';
+            $names = [];
+            foreach ($this->entries as $entryPath => $_entry) {
+                // PHP converts numeric-string array keys (e.g. ZIP entry "2026")
+                // to integers; filesystem path functions require strings here.
+                $entryPath = (string)$entryPath;
+                if ($entryPath === $normalized || !str_starts_with($entryPath, $prefix)) {
+                    continue;
+                }
+                $remaining = substr($entryPath, strlen($prefix));
+                if ($remaining !== '' && !str_contains($remaining, '/')) {
+                    $names[] = $remaining;
+                }
             }
         }
         sort($names, SORT_STRING);
@@ -414,7 +498,7 @@ final class ArchiveStorage extends Common {
         if ($normalized === null || !$this->available()) {
             return null;
         }
-        return $this->entries[$normalized] ?? null;
+        return $this->entries[$normalized] ?? $this->folderIndex?->entry($normalized);
     }
 
     private static function normalizePath(string $path): ?string {
@@ -495,12 +579,13 @@ final class ArchiveStorage extends Common {
             }
 
             $index = json_decode((string)$current['index_json'], true, 512, JSON_THROW_ON_ERROR);
-            if (!is_array($index['entries'] ?? null)) {
+            $folders = $index['folders'] ?? null;
+            if (!is_array($folders) && !is_array($index['entries'] ?? null)) {
                 throw new \RuntimeException('The archive index is invalid.');
             }
             $rootTime = $this->source->getMTime();
-            $entries = ['' => ['type' => 'dir', 'size' => 0, 'mtime' => $rootTime, 'originalName' => null]];
-            foreach ($index['entries'] as $path => $metadata) {
+            $entries = ['' => ['type' => 'dir', 'size' => $folders === null ? 0 : (int)$index['totalSize'], 'mtime' => $rootTime, 'originalName' => null]];
+            foreach ($index['entries'] ?? [] as $path => $metadata) {
                 $normalized = self::normalizePath((string)$path);
                 if ($normalized === null || $normalized === '' || !self::fitsCachePath($this->branch, $normalized) || !is_array($metadata)
                     || !in_array($metadata['type'] ?? null, ['file', 'dir'], true)) {
@@ -516,6 +601,7 @@ final class ArchiveStorage extends Common {
             $this->password = empty($current['password']) ? null : $this->crypto->decrypt((string)$current['password']);
             $this->expandedBytes = max(1, (int)($index['totalSize'] ?? 0));
             $this->entries = $entries;
+            $this->folderIndex = $folders === null ? null : new ZipFolderIndex($folders);
             $this->accessResolved = true;
         } catch (\Throwable) {
             $this->source = null;

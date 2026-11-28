@@ -59,7 +59,7 @@ def run():
         report.check('fixture folder created', alice.dav('MKCOL', 'Team')[0] == 201)
         report.check('source archive uploaded', alice.dav('PUT', 'Team/fixture.zip', data=source_bytes)[0] == 201)
         source_id = alice.file_id('Team/fixture.zip')
-        alice.ocs('POST', payload={'path': '/Team', 'shareType': 0, 'shareWith': bob.user, 'permissions': 31})
+        share = alice.ocs('POST', payload={'path': '/Team', 'shareType': 0, 'shareWith': bob.user, 'permissions': 31})
         report.check('recipient can write ordinary shared files', bob.dav('PUT', 'Team/writable-control.txt', data=b'share is writable')[0] == 201)
         status, mount = bob.api('POST', '/mounts', {'sourceId': source_id, 'name': 'Readonly archive', 'pinned': False})
         report.check('writable participant connects one shared archive', status == 201)
@@ -98,6 +98,42 @@ def run():
                              client.dav('GET', archive_path + '/' + name) == (200, content))
             report.check(role + ': source ZIP preserved byte for byte', client.dav('GET', 'Team/fixture.zip') == (200, source_bytes))
         report.check('owner disconnects test mount', alice.api('DELETE', '/mounts/' + str(mount_id))[0] == 200)
+        mount_id = None
+
+        large_zip = io.BytesIO()
+        with zipfile.ZipFile(large_zip, 'w') as archive:
+            archive.writestr('nested/sub/data.txt', b'ZIP member on demand')
+            archive.writestr('empty/', b'')
+            for item in range(10_000):
+                archive.writestr(f'group-{item // 500}/file-{item}.txt', b'')
+        report.check('large ZIP uploaded', alice.dav('PUT', 'Team/large.zip', data=large_zip.getvalue())[0] == 201)
+        connection = {'sourceId': alice.file_id('Team/large.zip'), 'name': 'On-demand archive'}
+        status, fallback = alice.api('POST', '/mounts', connection)
+        report.check('full indexing offers an explicit retry', status == 422
+                     and fallback.get('code') == 'mount_retry_on_demand')
+        lazy_path = 'Team/On-demand archive'
+        report.check('failed full indexing does not create a mount', alice.dav('PROPFIND', lazy_path)[0] == 404)
+        retry = dict(connection, mode='on_demand')
+        report.check('retry rejects a stale source ETag',
+                     alice.api('POST', '/mounts', dict(retry, expectedEtag='stale'))[0] == 409)
+        status, mounted = alice.api('POST', '/mounts', dict(retry, expectedEtag=fallback['sourceEtag']))
+        report.check('explicit on-demand retry connects the archive', status == 201)
+        mount_id = int(mounted['id'])
+        member_path = lazy_path + '/nested/sub/data.txt'
+        report.check('recipient reads a deep member before opening its folders',
+                     bob.dav('GET', member_path) == (200, b'ZIP member on demand'))
+        report.check('on-demand member has the same file ID for owner and recipient',
+                     bob.file_id(member_path) == alice.file_id(member_path))
+        root_members = bob.names(lazy_path)
+        report.check('on-demand listing includes immediate members and empty folders',
+                     {'nested', 'empty', 'group-0'}.issubset(root_members)
+                     and 'data.txt' not in root_members
+                     and 'data.txt' in bob.names(lazy_path + '/nested/sub'))
+        alice.ocs('DELETE', '/' + str(share['data']['id']))
+        report.check('revoked share blocks on-demand archive access', bob.dav('GET', member_path)[0] == 404)
+        report.check('owner retains access and can open a previously unvisited folder',
+                     'file-0.txt' in alice.names(lazy_path + '/group-0'))
+        report.check('owner disconnects on-demand mount', alice.api('DELETE', '/mounts/' + str(mount_id))[0] == 200)
         mount_id = None
         completed = True
     except Exception as failure:

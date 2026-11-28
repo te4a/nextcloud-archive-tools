@@ -21,6 +21,7 @@ final class AccessCache implements ICache {
         private Closure $isAccessible,
         private Closure $readDirectory,
         private Closure $seedRoot,
+        private ?Closure $hydrate = null,
     ) {}
 
     public function getNumericStorageId(): int {
@@ -34,12 +35,19 @@ final class AccessCache implements ICache {
         if ($file === '') {
             return ($this->seedRoot)($this->cache);
         }
-        return ($this->isAccessible)() ? $this->cache->getId($this->nativePath((string)$file)) : -1;
+        if (!($this->isAccessible)()) {
+            return -1;
+        }
+        ($this->hydrate)?->__invoke($this->cache, (string)$file, false);
+        return $this->cache->getId($this->nativePath((string)$file));
     }
 
     public function get($file): ICacheEntry|false {
         if (!($this->isAccessible)()) {
             return false;
+        }
+        if (is_string($file)) {
+            ($this->hydrate)?->__invoke($this->cache, $file, false);
         }
         $entry = $this->cache->get(is_int($file) ? $file : $this->nativePath((string)$file));
         return $entry instanceof ICacheEntry ? $this->formatCacheEntry($entry) : false;
@@ -50,12 +58,17 @@ final class AccessCache implements ICache {
     }
 
     public function getFolderContentsById(int $fileId, ?string $mimeTypeFilter = null): array {
-        if ($this->getPathById($fileId) === null) {
+        $folder = $this->getPathById($fileId);
+        if ($folder === null) {
             return [];
         }
-        return ($this->readDirectory)(fn (): array => ($this->isAccessible)()
-            ? $this->formatEntries($this->cache->getFolderContentsById($fileId, $mimeTypeFilter))
-            : []);
+        return ($this->readDirectory)(function () use ($folder, $fileId, $mimeTypeFilter): array {
+            if (!($this->isAccessible)()) {
+                return [];
+            }
+            ($this->hydrate)?->__invoke($this->cache, $folder, true);
+            return $this->formatEntries($this->cache->getFolderContentsById($fileId, $mimeTypeFilter));
+        });
     }
 
     public function getParentId($file): int {
@@ -70,7 +83,11 @@ final class AccessCache implements ICache {
     }
 
     public function getStatus($file): int {
-        return ($this->isAccessible)() ? $this->cache->getStatus($this->nativePath((string)$file)) : ICache::NOT_FOUND;
+        if (!($this->isAccessible)()) {
+            return ICache::NOT_FOUND;
+        }
+        ($this->hydrate)?->__invoke($this->cache, (string)$file, false);
+        return $this->cache->getStatus($this->nativePath((string)$file));
     }
 
     public function getPathById($id): ?string {

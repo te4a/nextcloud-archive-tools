@@ -1,6 +1,6 @@
 # Stable release preparation
 
-Archive Tools targets a first public stable release after beta and release-candidate testing. The current beta is `0.5.0-beta.11`. A version suffix identifies a prerelease and carries the same App Store publishing requirements.
+Archive Tools targets a first public stable release after beta and release-candidate testing. The current beta is `0.5.0-beta.12`. A version suffix identifies a prerelease and carries the same App Store publishing requirements.
 
 ## Release scope
 
